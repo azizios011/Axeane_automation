@@ -11,6 +11,7 @@ class ImportTab(ttk.Frame):
         self.file_path = tk.StringVar(value="")
         self.csv_data: list[dict] = []
         self.formulas = FORMULAS.copy()
+        self.formula_vars = []
 
         self._build_ui()
 
@@ -56,6 +57,8 @@ class ImportTab(ttk.Frame):
         for widget in self.formula_list_frame.winfo_children():
             widget.destroy()
             
+        self.formula_vars = []
+        
         canvas = tk.Canvas(self.formula_list_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.formula_list_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -67,91 +70,109 @@ class ImportTab(ttk.Frame):
         scrollbar.pack(side="right", fill="y")
 
         for idx, f in enumerate(self.formulas):
-            row_frame = ttk.Frame(scrollable_frame, relief=tk.GROOVE, borderwidth=1)
-            row_frame.pack(fill=tk.X, padx=5, pady=2)
+            self._build_formula_ui(scrollable_frame, idx, f)
             
-            info = f"Client: '{f['client_match']}' | Client: {f['compte_client']} | TVA19: {f['compte_tva_19']} | HT19: {f['compte_ht_19']}"
-            if f['use_timbre']: info += f" | Timbre: {f['compte_timbre']}"
-            if f['use_7_percent']: info += f" | 7%: TVA({f['compte_tva_7']}) HT({f['compte_ht_7']})"
-            if f['use_cash']: info += f" | Cash: {f['compte_caisse']}"
-            
-            ttk.Label(row_frame, text=info, font=("Arial", 9), justify=tk.LEFT).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
-            ttk.Button(row_frame, text="🗑️", width=3, command=lambda i=idx: self._delete_formula(i)).pack(side=tk.RIGHT, padx=5, pady=5)
+        ttk.Frame(scrollable_frame, height=20).pack(fill=tk.X)
+
+    def _build_formula_ui(self, parent, idx, f_data):
+        frame = ttk.LabelFrame(parent, text=f"Formula {idx+1}")
+        frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        vars_dict = {}
+        
+        # Row 0: Client Match & Delete
+        ttk.Label(frame, text="Client Match:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        vars_dict['client_match'] = tk.StringVar(value=f_data.get('client_match', ''))
+        ttk.Entry(frame, textvariable=vars_dict['client_match'], width=25).grid(row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Button(frame, text="🗑️ Delete", command=lambda: self._delete_formula(idx)).grid(row=0, column=3, padx=5, pady=2)
+
+        # Row 1: Base Accounts
+        ttk.Label(frame, text="Compte Client:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_client'] = tk.StringVar(value=f_data.get('compte_client', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_client'], width=15).grid(row=1, column=1, padx=5, pady=2)
+
+        ttk.Label(frame, text="Compte HT 19%:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_ht_19'] = tk.StringVar(value=f_data.get('compte_ht_19', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_ht_19'], width=15).grid(row=1, column=3, padx=5, pady=2)
+
+        # Row 2: TVA 19%
+        ttk.Label(frame, text="Compte TVA 19%:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_tva_19'] = tk.StringVar(value=f_data.get('compte_tva_19', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=2, column=1, padx=5, pady=2)
+        
+        # Row 3: Timbre
+        vars_dict['use_timbre'] = tk.BooleanVar(value=f_data.get('use_timbre', False))
+        ttk.Checkbutton(frame, text="Include Timbre (1.000)", variable=vars_dict['use_timbre']).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame, text="Compte Timbre:").grid(row=3, column=2, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_timbre'] = tk.StringVar(value=f_data.get('compte_timbre', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_timbre'], width=15).grid(row=3, column=3, padx=5, pady=2)
+
+        # Row 4: 7% Rate
+        vars_dict['use_7_percent'] = tk.BooleanVar(value=f_data.get('use_7_percent', False))
+        ttk.Checkbutton(frame, text="Include 7% Rate", variable=vars_dict['use_7_percent']).grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Compte HT 7%:").grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_ht_7'] = tk.StringVar(value=f_data.get('compte_ht_7', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_ht_7'], width=15).grid(row=4, column=3, padx=5, pady=2)
+
+        # Row 5: TVA 7%
+        ttk.Label(frame, text="Compte TVA 7%:").grid(row=5, column=2, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_tva_7'] = tk.StringVar(value=f_data.get('compte_tva_7', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_tva_7'], width=15).grid(row=5, column=3, padx=5, pady=2)
+
+        # Row 6: Cash
+        vars_dict['use_cash'] = tk.BooleanVar(value=f_data.get('use_cash', False))
+        ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=6, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Compte Caisse:").grid(row=6, column=2, sticky=tk.W, padx=5, pady=2)
+        vars_dict['compte_caisse'] = tk.StringVar(value=f_data.get('compte_caisse', ''))
+        ttk.Entry(frame, textvariable=vars_dict['compte_caisse'], width=15).grid(row=6, column=3, padx=5, pady=2)
+
+        self.formula_vars.append(vars_dict)
+
+    def _sync_formulas_from_ui(self):
+        updated = []
+        for v in self.formula_vars:
+            updated.append({
+                "client_match": v['client_match'].get().strip(),
+                "compte_client": v['compte_client'].get().strip(),
+                "compte_tva_19": v['compte_tva_19'].get().strip(),
+                "compte_ht_19": v['compte_ht_19'].get().strip(),
+                "use_timbre": v['use_timbre'].get(),
+                "compte_timbre": v['compte_timbre'].get().strip(),
+                "use_7_percent": v['use_7_percent'].get(),
+                "compte_tva_7": v['compte_tva_7'].get().strip(),
+                "compte_ht_7": v['compte_ht_7'].get().strip(),
+                "use_cash": v['use_cash'].get(),
+                "compte_caisse": v['compte_caisse'].get().strip()
+            })
+        self.formulas = updated
 
     def _add_formula(self):
-        dialog = tk.Toplevel(self)
-        dialog.title("Add Accounting Formula")
-        dialog.geometry("420x520")
-        dialog.transient(self)
-        dialog.grab_set()
-
-        vars_dict = {}
-        row = 0
-        def add_field(label, default=""):
-            nonlocal row
-            ttk.Label(dialog, text=label).grid(row=row, column=0, sticky=tk.W, padx=10, pady=5)
-            v = tk.StringVar(value=default)
-            vars_dict[label] = v
-            ttk.Entry(dialog, textvariable=v, width=30).grid(row=row, column=1, padx=10, pady=5)
-            row += 1
-            return v
-
-        vars_dict['client_match'] = add_field("Client Name (Match):", "PASSAGER")
-        vars_dict['compte_client'] = add_field("Compte Client:", "411000")
-        vars_dict['compte_tva_19'] = add_field("Compte TVA 19%:", "436710")
-        vars_dict['compte_ht_19'] = add_field("Compte HT 19%:", "707019")
-        
-        row += 1
-        use_timbre = tk.BooleanVar(value=True)
-        ttk.Checkbutton(dialog, text="Include Timbre (1.000 TND)", variable=use_timbre).grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
-        row += 1
-        vars_dict['compte_timbre'] = add_field("Compte Timbre:", "736000")
-        
-        row += 1
-        use_7 = tk.BooleanVar(value=False)
-        ttk.Checkbutton(dialog, text="Include 7% Rate Rows", variable=use_7).grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
-        row += 1
-        vars_dict['compte_tva_7'] = add_field("Compte TVA 7%:", "436707")
-        vars_dict['compte_ht_7'] = add_field("Compte HT 7%:", "707007")
-        
-        row += 1
-        use_cash = tk.BooleanVar(value=False)
-        ttk.Checkbutton(dialog, text="Include Cash (Espèces) Logic", variable=use_cash).grid(row=row, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
-        row += 1
-        vars_dict['compte_caisse'] = add_field("Compte Caisse:", "541100")
-
-        def save():
-            new_f = {
-                "client_match": vars_dict['client_match'].get().strip(),
-                "compte_client": vars_dict['compte_client'].get().strip(),
-                "compte_tva_19": vars_dict['compte_tva_19'].get().strip(),
-                "compte_ht_19": vars_dict['compte_ht_19'].get().strip(),
-                "use_timbre": use_timbre.get(),
-                "compte_timbre": vars_dict['compte_timbre'].get().strip(),
-                "use_7_percent": use_7.get(),
-                "compte_tva_7": vars_dict['compte_tva_7'].get().strip(),
-                "compte_ht_7": vars_dict['compte_ht_7'].get().strip(),
-                "use_cash": use_cash.get(),
-                "compte_caisse": vars_dict['compte_caisse'].get().strip()
-            }
-            self.formulas.append(new_f)
-            self._refresh_formula_list()
-            dialog.destroy()
-
-        ttk.Button(dialog, text="Save Formula", command=save).pack(pady=20)
+        self._sync_formulas_from_ui()
+        self.formulas.append({
+            "client_match": "", "compte_client": "", "compte_tva_19": "", "compte_ht_19": "",
+            "use_timbre": False, "compte_timbre": "",
+            "use_7_percent": False, "compte_tva_7": "", "compte_ht_7": "",
+            "use_cash": False, "compte_caisse": ""
+        })
+        self._refresh_formula_list()
 
     def _delete_formula(self, idx):
+        self._sync_formulas_from_ui()
         del self.formulas[idx]
         self._refresh_formula_list()
 
     def _save_formulas(self):
+        self._sync_formulas_from_ui()
         save_formulas(self.formulas)
         messagebox.showinfo("Success", "Formulas saved successfully!")
 
     def _import_file(self):
         path = filedialog.askopenfilename(title="Choisir le fichier CSV", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
-        if not path:
-            return
+        if not path: return
         self.file_path.set(path)
         try:
             import csv

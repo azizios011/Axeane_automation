@@ -281,7 +281,9 @@ async def reset_form(page: Page) -> None:
         await wait(page, 500)
 
 # 🆕 UPDATED: Accepts the UI callback
-async def run(entries: list[dict], update_ui_callback=None) -> None:
+# ... [Keep all other functions exactly as they were] ...
+
+async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> None:
     cdp_url = SETTINGS.get("cdp_url", "http://localhost:9222")
     async with async_playwright() as pw:
         log(f"Connecting to CDP at {cdp_url}...")
@@ -303,6 +305,11 @@ async def run(entries: list[dict], update_ui_callback=None) -> None:
 
         total = len(entries)
         for i, entry in enumerate(entries):
+            # 🆕 Check if the user clicked the Stop button
+            if stop_event and stop_event.is_set():
+                log("🛑 Automation stopped by user.")
+                break
+                
             if not entry.get("balanced", True):
                 log(f"SKIP {entry['docRef']} — not balanced locally")
                 if update_ui_callback: update_ui_callback(entry['docRef'], 'error')
@@ -315,11 +322,9 @@ async def run(entries: list[dict], update_ui_callback=None) -> None:
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
                 await fill_line(page, j, line)
                 
-            # 🆕 Verify entry, open/close Dernières écritures, and color UI row
             is_verified = await verify_entry(page, entry, update_ui_callback)
             
             if is_verified:
-                # 6. Click "Enregistrer" ONLY if verified
                 await save_entry(page)
                 await reset_form(page)
             else:

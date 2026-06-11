@@ -5,7 +5,7 @@ from ui.import_tab import ImportTab
 from ui.csv_table import CsvTableTab
 
 class MainWindow:
-    def __init__(self, on_process_callback):
+    def __init__(self, on_process_callback, on_stop_callback):
         self.root = tk.Tk()
         self.root.title("Axeane Kompta Automation Studio")
         self.root.geometry("950x700")
@@ -16,6 +16,8 @@ class MainWindow:
         style.map("Accent.TButton", background=[("active", "#005a9e")])
 
         self.on_process_callback = on_process_callback
+        self.on_stop_callback = on_stop_callback
+        
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -25,7 +27,7 @@ class MainWindow:
         self.import_tab = ImportTab(self.notebook, on_data_loaded=self._on_data_loaded)
         self.notebook.add(self.import_tab, text=" 2. Import Data ")
 
-        self.csv_table_tab = CsvTableTab(self.notebook, on_process=self._on_process)
+        self.csv_table_tab = CsvTableTab(self.notebook, on_process=self._on_process, on_stop=self._on_stop)
         self.notebook.add(self.csv_table_tab, text=" 3. Configure & Process ")
 
     def _on_data_loaded(self, doc_type: str, file_path: str, data: list[dict]):
@@ -38,12 +40,15 @@ class MainWindow:
             self.notebook.select(0)
             return
 
-        # 🆕 Create a callback that links the automation to the UI table
         def update_ui_callback(ref: str, status: str):
             self.csv_table_tab.update_row_color(ref, status)
 
         if self.on_process_callback:
             self.on_process_callback(mapping, data, doc_type, update_ui_callback)
+
+    def _on_stop(self):
+        if self.on_stop_callback:
+            self.on_stop_callback()
 
     def run(self):
         self.root.mainloop()

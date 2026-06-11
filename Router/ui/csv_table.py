@@ -66,6 +66,14 @@ class CsvTableTab(ttk.Frame):
         ttk.Button(btn_frame, text="💾 Save Mapping Config", command=self._save_mapping).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="🚀 Process & Automate", command=self._process, style="Accent.TButton").pack(side=tk.RIGHT, padx=5)
 
+               # 🆕 Stop Button
+        self.stop_btn = ttk.Button(btn_frame, text="🛑 Stop Automation", command=self._stop, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.RIGHT, padx=5)
+        
+        self.process_btn = ttk.Button(btn_frame, text="🚀 Process & Automate", command=self._process, style="Accent.TButton")
+        self.process_btn.pack(side=tk.RIGHT, padx=5)
+
+
     def _build_mapping_ui(self):
         for widget in self.mapping_frame.winfo_children():
             widget.destroy()

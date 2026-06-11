@@ -5,6 +5,8 @@ from functions.csv_parser import parse_csv_with_mapping
 from functions.helpers import log
 from modules.axeane_session import run
 
+stop_event = threading.Event()
+
 def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_ui_callback=None):
     log(f"Processing data for document type: {doc_type}...")
     entries = parse_csv_with_mapping(mapping, raw_data, doc_type)
@@ -19,20 +21,24 @@ def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_u
         return
 
     log(f"🚀 Starting automation for {valid_count} entries...")
+    stop_event.clear()
     
-    # 🆕 Run in a background thread to keep the UI responsive for live color updates
     def run_async():
         try:
-            asyncio.run(run(entries, update_ui_callback))
+            asyncio.run(run(entries, update_ui_callback, stop_event))
             log("✅ Automation finished successfully!")
         except Exception as e:
             log(f"❌ Automation failed: {e}")
 
     threading.Thread(target=run_async, daemon=True).start()
 
+def stop_automation():
+    log("🛑 Stop requested by user...")
+    stop_event.set()
+
 def main() -> None:
     log("Starting Axeane Kompta Automation UI...")
-    app = MainWindow(on_process_callback=on_process_data)
+    app = MainWindow(on_process_callback=on_process_data, on_stop_callback=stop_automation)
     app.run()
 
 if __name__ == "__main__":
