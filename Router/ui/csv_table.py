@@ -3,6 +3,19 @@ from tkinter import ttk
 from typing import Callable
 from data.mappings import MAPPINGS, save_user_mappings
 
+# ── Define the exact columns to show in the preview table ────────────────────
+# Maps the "Clean UI Header" -> "Actual CSV Column Name"
+DISPLAY_COLUMNS = {
+    "Client": "Client",
+    "Operation": "Operation",
+    "Ref": "Reference",
+    "Date": "Date",
+    "TTC": "TTC",
+    "HT": "Tot. Net. HT",
+    "Rate": "TVA %",
+    "TVA": "Montant TVA"
+}
+
 class CsvTableTab(ttk.Frame):
     def __init__(self, parent, on_process: Callable[[dict, list[dict]], None]):
         super().__init__(parent)
@@ -74,17 +87,25 @@ class CsvTableTab(ttk.Frame):
 
     def _build_table_ui(self):
         self.tree.delete(*self.tree.get_children())
-        self.tree["columns"] = self.headers
+        
+        # Filter to only show the columns defined in DISPLAY_COLUMNS that actually exist in the CSV
+        self.display_headers = [disp_name for disp_name, csv_col in DISPLAY_COLUMNS.items() if csv_col in self.headers]
+        
+        self.tree["columns"] = self.display_headers
         self.tree["show"] = "headings"
 
-        for col in self.headers:
+        for col in self.display_headers:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=120, anchor=tk.W)
+            # Make Client and Operation columns wider for better readability
+            width = 180 if col in ["Client", "Operation"] else 100
+            self.tree.column(col, width=width, anchor=tk.W)
 
-        for row in self.csv_data[:100]: # Preview first 100 rows
-            self.tree.insert("", tk.END, values=[row.get(h, "") for h in self.headers])
+        # 🆕 Show ALL rows (removed the 100-row limit)
+        for row in self.csv_data:
+            values = [row.get(DISPLAY_COLUMNS[col], "") for col in self.display_headers]
+            self.tree.insert("", tk.END, values=values)
 
-        self.info_label.config(text=f"Loaded: {self.current_doc_type} ({len(self.csv_data)} total rows, showing 100)")
+        self.info_label.config(text=f"Loaded: {self.current_doc_type} ({len(self.csv_data)} total rows)")
 
     def _save_mapping(self):
         active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
