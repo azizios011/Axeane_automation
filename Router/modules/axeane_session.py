@@ -31,23 +31,26 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
     await wait(page)
 
 async def get_current_context(page: Page) -> tuple[str, str]:
-    """Reads the currently selected Entreprise and Exercice directly from the Axeane UI."""
+    """Reads the currently selected Entreprise and Exercice directly from the UI."""
+    # 1. Try reading from sidebar dropdowns (always in DOM, immune to responsive CSS hiding)
     try:
-        # 🆕 Wait for the context chips to actually render in the DOM
-        await page.wait_for_selector(".ctx-chip-entreprise .ctx-chip-text", timeout=10000)
+        ent = await page.evaluate("document.querySelector('#entreprise .filter-option span')?.textContent?.trim()")
+        exe = await page.evaluate("document.querySelector('#exercice .filter-option span')?.textContent?.trim()")
+        if ent and exe and ent != 'Entreprise...' and exe != 'Exercice...':
+            return ent, exe
+    except Exception:
+        pass
         
-        context = await page.evaluate("""() => {
-            const entEl = document.querySelector('.ctx-chip-entreprise .ctx-chip-text');
-            const exeEl = document.querySelector('.ctx-chip-exercice .ctx-chip-text');
-            return {
-                entreprise: entEl ? entEl.textContent.trim() : 'Unknown',
-                exercice: exeEl ? exeEl.textContent.trim() : 'Unknown'
-            };
-        }""")
-        return context.get("entreprise", "Unknown"), context.get("exercice", "Unknown")
-    except Exception as e:
-        log(f"Warning: Could not detect context: {e}")
-        return "Unknown", "Unknown"
+    # 2. Fallback to header chips (if screen is wide enough)
+    try:
+        ent = await page.locator(".ctx-chip-entreprise .ctx-chip-text").text_content(timeout=3000)
+        exe = await page.locator(".ctx-chip-exercice .ctx-chip-text").text_content(timeout=3000)
+        if ent and exe:
+            return ent.strip(), exe.strip()
+    except Exception:
+        pass
+        
+    return "Unknown", "Unknown"
 
 async def do_login(page: Page) -> None:
     if await page.locator("#loginInput").count() == 0:
@@ -81,39 +84,44 @@ async def do_login(page: Page) -> None:
         raise RuntimeError("Login failed — check credentials")
     await wait(page, 1000)
 
-async def select_context(page: Page, entreprise: str, exercice: str) -> None:
-    if entreprise == "Unknown" or exercice == "Unknown":
-        log("⚠️ Context unknown, skipping automatic selection. Please ensure it's correct in the browser.")
-        return
-        
-    log(f"Ensuring context: {entreprise} / {exercice}")
-    await nya_select_by_js(page, "entreprise", entreprise)
-    await wait(page, 800)
-    await nya_select_by_js(page, "exercice", exercice)
-    await wait(page, 800)
-
 async def navigate_to_saisie(page: Page) -> None:
     log("Navigating to Saisie des écritures...")
     
-    # 🆕 1. Ensure the main sidebar is open (it has the 'nax-side-bar-menu-active' class when open)
-    sidebar = page.locator(".axe-sidebar.nax-side-bar-menu-active")
-    if await sidebar.count() == 0:
-        log("  Sidebar is collapsed. Opening it...")
-        await page.locator("#menuBtn").click()
+    # 1. Open sidebar if not active (using JS to avoid overlay interception)
+    is_open = await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')")
+    if not is_open:
+        log("  Sidebar is collapsed. Opening it via JS...")
+        await page.evaluate("document.getElementById('menuBtn').click()")
         await wait(page, 800)
     
-    # 🆕 2. Click "Comptabilité générale" specifically inside the sidebar
+    # 2. Click "Comptabilité générale" in the sidebar menu
     log("  Clicking 'Comptabilité générale'...")
-    comptabilite_menu = page.locator(".axe-sidebar span.ng-binding:text('Comptabilité générale')").first
-    await comptabilite_menu.scroll_into_view_if_needed()
-    await comptabilite_menu.click()
-    await wait(page, 800)
+    clicked_menu = await page.evaluate("""() => {
+        const items = document.querySelectorAll('.nax-main-menu-item span.ng-binding');
+        for (const item of items) {
+            if (item.textContent.trim() === 'Comptabilité générale') {
+                item.closest('.nax-main-menu-item').click();
+                return true;
+            }
+        }
+        return false;
+    }""")
+    if not clicked_menu:
+        log("  WARNING: Could not find 'Comptabilité générale' in sidebar.")
+    await wait(page, 1000)
     
-    # 🆕 3. Click "Saisie des écritures" in the expanded dock panel
+    # 3. Click "Saisie des écritures" in the dock panel
     log("  Clicking 'Saisie des écritures'...")
-    saisie_menu = page.locator(".kc-dock-item[data-code='ECRITURE_AVANCEE']")
-    await saisie_menu.scroll_into_view_if_needed()
-    await saisie_menu.click()
+    clicked_saisie = await page.evaluate("""() => {
+        const item = document.querySelector(".kc-dock-item[data-code='ECRITURE_AVANCEE']");
+        if (item) {
+            item.click();
+            return true;
+        }
+        return false;
+    }""")
+    if not clicked_saisie:
+        log("  WARNING: Could not find 'Saisie des écritures' in dock panel.")
     await wait(page, 1500)
     
     log("✅ Saisie des écritures opened")
@@ -205,11 +213,15 @@ async def run(entries: list[dict]) -> None:
 
         await do_login(page)
         
-        # Dynamically detect and use the current context from the browser
+        # Dynamically detect context from the browser (reads sidebar dropdowns or header chips)
         entreprise, exercice = await get_current_context(page)
         log(f"✅ Detected Browser Context: {entreprise} / {exercice}")
         
-        await select_context(page, entreprise, exercice)
+        if entreprise == "Unknown" or exercice == "Unknown":
+            log("⚠️ WARNING: Could not detect context. Please ensure it's correct in the browser.")
+        else:
+            log(f"  Using context: {entreprise} / {exercice}")
+
         await navigate_to_saisie(page)
 
         total = len(entries)
