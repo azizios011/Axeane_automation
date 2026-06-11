@@ -226,6 +226,48 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
         await page.keyboard.press("Tab")
         await wait(page, 300)
 
+# 🆕 NEW: Verification System
+async def verify_entry(page: Page, entry: dict, update_ui_callback):
+    ref = entry['docRef']
+    
+    # 1. Color row Yellow (Processing)
+    if update_ui_callback: update_ui_callback(ref, 'processing')
+        
+    # 2. Open "Dernières écritures" panel
+    is_hidden = await page.evaluate("""() => {
+        const zone = document.querySelector('.td-last-zone');
+        return zone ? zone.classList.contains('td-anim-hidden') : true;
+    }""")
+    if is_hidden:
+        await page.evaluate("document.querySelector('button[ng-click=\"showAndHideLastEc()\"]').click()")
+        await wait(page, 500)
+        
+    # 3. Verify the current entry using the live KPI bar (Tot Débit, Tot Crédit, Solde)
+    try:
+        tot_debit = await page.locator(".ax-badge-kpi.ax-badge-green .ax-badge-kpi-value").text_content(timeout=2000)
+        tot_credit = await page.locator(".ax-badge-kpi.ax-badge-red .ax-badge-kpi-value").text_content(timeout=2000)
+        solde = await page.locator(".ax-badge-kpi.ax-badge-purple .ax-badge-kpi-value").text_content(timeout=2000)
+        
+        log(f"  📊 Verification -> Débit: {tot_debit.strip()} | Crédit: {tot_credit.strip()} | Solde: {solde.strip()}")
+        is_balanced = "0,000" in solde or "0.000" in solde
+    except Exception as e:
+        log(f"  ⚠️ Could not read KPI bar: {e}")
+        is_balanced = False
+
+    # 4. Close "Dernières écritures" panel
+    is_hidden_after = await page.evaluate("""() => {
+        const zone = document.querySelector('.td-last-zone');
+        return zone ? zone.classList.contains('td-anim-hidden') : true;
+    }""")
+    if not is_hidden_after:
+        await page.evaluate("document.querySelector('button[ng-click=\"showAndHideLastEc()\"]').click()")
+        await wait(page, 300)
+        
+    # 5. Color row Green (Success) or Red (Error)
+    if update_ui_callback: update_ui_callback(ref, 'success' if is_balanced else 'error')
+        
+    return is_balanced
+
 async def save_entry(page: Page) -> None:
     await page.locator("#ec-save").scroll_into_view_if_needed()
     await page.locator("#ec-save").click()
@@ -237,7 +279,8 @@ async def reset_form(page: Page) -> None:
         await btn.first.click()
         await wait(page, 500)
 
-async def run(entries: list[dict]) -> None:
+# 🆕 UPDATED: Accepts the UI callback
+async def run(entries: list[dict], update_ui_callback=None) -> None:
     cdp_url = SETTINGS.get("cdp_url", "http://localhost:9222")
     async with async_playwright() as pw:
         log(f"Connecting to CDP at {cdp_url}...")
@@ -249,38 +292,38 @@ async def run(entries: list[dict]) -> None:
             all_pages[0] if all_pages else None,
         )
         
-        if page is None:
-            raise RuntimeError("No page found. Is Axeane Kompta open?")
-            
+        if page is None: raise RuntimeError("No page found. Is Axeane Kompta open?")
         log(f"Connected to: {page.url}")
         await page.bring_to_front()
 
         await do_login(page)
-        
-        entreprise, exercice = await get_current_context(page)
-        log(f"✅ Detected Browser Context: {entreprise} / {exercice}")
-        
-        if entreprise == "Unknown" or exercice == "Unknown":
-            log("⚠️ WARNING: Could not detect context. Please ensure it's correct in the browser.")
-        else:
-            log(f"  Using context: {entreprise} / {exercice}")
-
         await select_context(page)
         await navigate_to_saisie(page)
 
         total = len(entries)
         for i, entry in enumerate(entries):
             if not entry.get("balanced", True):
-                log(f"SKIP {entry['docRef']} — not balanced")
+                log(f"SKIP {entry['docRef']} — not balanced locally")
+                if update_ui_callback: update_ui_callback(entry['docRef'], 'error')
                 continue
 
             log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
+            
             await fill_header(page, entry)
             for j, line in enumerate(entry["lines"]):
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
                 await fill_line(page, j, line)
-            await save_entry(page)
-            await reset_form(page)
+                
+            # 🆕 Verify entry, open/close Dernières écritures, and color UI row
+            is_verified = await verify_entry(page, entry, update_ui_callback)
+            
+            if is_verified:
+                # 6. Click "Enregistrer" ONLY if verified
+                await save_entry(page)
+                await reset_form(page)
+            else:
+                log(f"  ❌ SKIPPING SAVE: Entry {entry['docRef']} is not balanced in Axeane UI!")
+                await reset_form(page)
 
         log("Done — all entries processed.")
         

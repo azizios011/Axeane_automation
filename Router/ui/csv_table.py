@@ -113,6 +113,26 @@ class CsvTableTab(ttk.Frame):
         save_user_mappings(MAPPINGS)
         self.info_label.config(text="✅ Mapping configuration saved!", foreground="green")
 
+# 🆕 NEW: Method to update row colors live from the background thread
+    def update_row_color(self, ref: str, status: str):
+        def _update():
+            color_map = {
+                'processing': '#FFF59D', # Light Yellow
+                'success': '#A5D6A7',    # Light Green
+                'error': '#EF9A9A'       # Light Red
+            }
+            tag = f"status_{ref.replace('/', '_')}"
+            self.tree.tag_configure(tag, background=color_map.get(status, '#FFFFFF'))
+            
+            for item in self.tree.get_children():
+                values = self.tree.item(item, 'values')
+                # Ref is the 3rd column (index 2)
+                if len(values) > 2 and values[2] == ref:
+                    self.tree.item(item, tags=(tag,))
+                    self.tree.see(item) # Auto-scroll to the active row
+                    break
+        self.after(0, _update) # Thread-safe UI update
+
     def _process(self):
         active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
         if not active_mapping:

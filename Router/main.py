@@ -1,21 +1,17 @@
 import asyncio
+import threading
 from ui.main_window import MainWindow
 from functions.csv_parser import parse_csv_with_mapping
 from functions.helpers import log
 from modules.axeane_session import run
 
-# 🆕 Add doc_type: str to the parameters
-def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str):
+def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_ui_callback=None):
     log(f"Processing data for document type: {doc_type}...")
-    
-    # 🆕 Pass doc_type to the parser
     entries = parse_csv_with_mapping(mapping, raw_data, doc_type)
     
     unbalanced = [e for e in entries if not e["balanced"]]
     if unbalanced:
-        log(f"⚠️ WARNING: {len(unbalanced)} unbalanced entries will be skipped:")
-        for e in unbalanced:
-            log(f"  - {e['docRef']}")
+        log(f"⚠️ WARNING: {len(unbalanced)} unbalanced entries will be skipped locally.")
 
     valid_count = len(entries) - len(unbalanced)
     if valid_count == 0:
@@ -23,12 +19,17 @@ def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str):
         return
 
     log(f"🚀 Starting automation for {valid_count} entries...")
-    try:
-        asyncio.run(run(entries))
-        log("✅ Automation finished successfully!")
-    except Exception as e:
-        log(f"❌ Automation failed: {e}")
-        
+    
+    # 🆕 Run in a background thread to keep the UI responsive for live color updates
+    def run_async():
+        try:
+            asyncio.run(run(entries, update_ui_callback))
+            log("✅ Automation finished successfully!")
+        except Exception as e:
+            log(f"❌ Automation failed: {e}")
+
+    threading.Thread(target=run_async, daemon=True).start()
+
 def main() -> None:
     log("Starting Axeane Kompta Automation UI...")
     app = MainWindow(on_process_callback=on_process_data)
