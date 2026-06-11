@@ -244,9 +244,10 @@ async def verify_entry(page: Page, entry: dict, update_ui_callback):
         
     # 3. Verify the current entry using the live KPI bar (Tot Débit, Tot Crédit, Solde)
     try:
-        tot_debit = await page.locator(".ax-badge-kpi.ax-badge-green .ax-badge-kpi-value").text_content(timeout=2000)
-        tot_credit = await page.locator(".ax-badge-kpi.ax-badge-red .ax-badge-kpi-value").text_content(timeout=2000)
-        solde = await page.locator(".ax-badge-kpi.ax-badge-purple .ax-badge-kpi-value").text_content(timeout=2000)
+        # 🆕 Added .first to avoid strict mode violation from the hidden foreign currency Solde badge
+        tot_debit = await page.locator(".ax-badge-kpi.ax-badge-green .ax-badge-kpi-value").first.text_content(timeout=2000)
+        tot_credit = await page.locator(".ax-badge-kpi.ax-badge-red .ax-badge-kpi-value").first.text_content(timeout=2000)
+        solde = await page.locator(".ax-badge-kpi.ax-badge-purple .ax-badge-kpi-value").first.text_content(timeout=2000)
         
         log(f"  📊 Verification -> Débit: {tot_debit.strip()} | Crédit: {tot_credit.strip()} | Solde: {solde.strip()}")
         is_balanced = "0,000" in solde or "0.000" in solde
