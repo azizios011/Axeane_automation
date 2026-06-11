@@ -68,16 +68,20 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
                 if tva > ZERO:
                     lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": tva, "credit": ZERO})
 
+        # ── Balance check + Timbre/Rounding patch ─────────────────────
         total_d = sum(l["debit"] for l in lines)
         total_c = sum(l["credit"] for l in lines)
         diff = (total_d - total_c).quantize(MILLIME, rounding=ROUND_HALF_UP)
         balanced = diff == ZERO
 
-        if not balanced and abs(diff) == MILLIME:
+        # 🆕 Patch differences up to 5.000 TND (covers the 1.000 TND Timbre fiscal)
+        if not balanced and abs(diff) <= Decimal("5.000"):
             if diff > ZERO:
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": MILLIME})
+                # Debits > Credits, need more Credits (e.g., Timbre on a Facture)
+                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": abs(diff)})
             else:
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": MILLIME, "credit": ZERO})
+                # Credits > Debits, need more Debits (e.g., Timbre on an Avoir)
+                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": abs(diff), "credit": ZERO})
             balanced = True
 
         entries.append({
