@@ -5,8 +5,19 @@ from data.config import (
     LBL_CLIENT, LBL_CAISSE, LBL_HT_19, LBL_HT_7, LBL_TVA, LBL_ROUND
 )
 
-def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
+# 🆕 Add doc_type: str to the parameters
+def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -> list[dict]:
     """Parse CSV data using a dynamic column mapping provided by the UI."""
+    
+    # 🆕 Map document type to Axeane Journal Code
+    journal_map = {
+        "Vente": "VT",
+        "Achat": "AC",
+        "Bank": "BQ",
+        "OD": "OD",
+        "Caisse": "CA"
+    }
+    journal_code = journal_map.get(doc_type, "VT")
     
     # 1. Normalize raw data keys to internal keys based on user mapping
     normalized_rows = []
@@ -22,7 +33,7 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
                 norm_row[internal_key] = str(val).strip()
         normalized_rows.append(norm_row)
 
-    # 2. Group by Reference (same logic as before)
+    # 2. Group by Reference
     groups: dict[str, list] = {}
     for r in normalized_rows:
         ref = r.get("ref", "").strip()
@@ -46,7 +57,6 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
 
         lines = []
         if not avoir:
-            # ── FACTURE ──────────────────────────────────────────────
             acc = ACC_CAISSE if cash else ACC_CLIENT
             lbl = LBL_CAISSE if cash else LBL_CLIENT
             lines.append({"account": acc, "label": lbl, "debit": ttc, "credit": ZERO})
@@ -58,7 +68,6 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
                 if tva > ZERO:
                     lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": ZERO, "credit": tva})
         else:
-            # ── AVOIR ────────────────────────────────────────────────
             acc = ACC_CAISSE if cash else ACC_CLIENT
             lbl = LBL_CAISSE if cash else LBL_CLIENT
             lines.append({"account": acc, "label": lbl, "debit": ZERO, "credit": ttc})
@@ -76,26 +85,36 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
         diff = (total_d - total_c).quantize(MILLIME, rounding=ROUND_HALF_UP)
         balanced = diff == ZERO
 
-        # 🆕 Patch differences up to 5.000 TND (covers the 1.000 TND Timbre fiscal)
         if not balanced and abs(diff) <= Decimal("5.000"):
             if diff > ZERO:
-                # Debits > Credits, need more Credits (e.g., Timbre on a Facture)
                 lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": abs(diff)})
             else:
-                # Credits > Debits, need more Debits (e.g., Timbre on an Avoir)
                 lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": abs(diff), "credit": ZERO})
             balanced = True
+
+        # 🆕 Extract Piece (Reference without the year)
+        # e.g., "AC000019/2026" -> "AC000019"
+        piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
+
+        # 🆕 Extract Libellé (Client name without the code)
+        # e.g., "C000262 | WLED NEMELA AUTO" -> "WLED NEMELA AUTO"
+        client_raw = first.get("client", "")
+        if "|" in client_raw:
+            client_name = client_raw.split("|", 1)[1].strip()
+        else:
+            client_name = client_raw.strip()
+        
+        libelle = client_name.upper()
 
         entries.append({
             "docRef": ref,
             "date": first.get("date", ""),
-            "journal": "VT",
-            "libelle": f"{first.get('operation', 'FACTURE').upper()} {ref}",
-            "piece": ref,
+            "journal": journal_code,  # 🆕 Dynamic journal code (VT, AC, BQ)
+            "libelle": libelle,       # 🆕 Clean client name
+            "piece": piece,           # 🆕 Reference without year
             "balanced": balanced,
             "lines": lines,
         })
 
     log(f"Parsed {len(entries)} entries from CSV ({sum(1 for e in entries if not e['balanced'])} unbalanced)")
     return entries
-    

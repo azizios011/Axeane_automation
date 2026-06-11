@@ -4,9 +4,12 @@ from functions.csv_parser import parse_csv_with_mapping
 from functions.helpers import log
 from modules.axeane_session import run
 
-def on_process_data(mapping: dict, raw_data: list[dict]):
-    log("Processing data with dynamic mapping...")
-    entries = parse_csv_with_mapping(mapping, raw_data)
+# 🆕 Add doc_type: str to the parameters
+def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str):
+    log(f"Processing data for document type: {doc_type}...")
+    
+    # 🆕 Pass doc_type to the parser
+    entries = parse_csv_with_mapping(mapping, raw_data, doc_type)
     
     unbalanced = [e for e in entries if not e["balanced"]]
     if unbalanced:
@@ -25,7 +28,7 @@ def on_process_data(mapping: dict, raw_data: list[dict]):
         log("✅ Automation finished successfully!")
     except Exception as e:
         log(f"❌ Automation failed: {e}")
-
+        
 def main() -> None:
     log("Starting Axeane Kompta Automation UI...")
     app = MainWindow(on_process_callback=on_process_data)

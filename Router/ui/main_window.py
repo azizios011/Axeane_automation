@@ -38,7 +38,8 @@ class MainWindow:
         self.csv_table_tab.load_data(doc_type, file_path, data)
         self.notebook.select(2)  # Switch to configuration tab
 
-    def _on_process(self, mapping: dict, data: list[dict]):
+     # 🆕 Add doc_type: str to the parameters
+    def _on_process(self, mapping: dict, data: list[dict], doc_type: str):
         if not self.pwa_tab.is_verified:
             tk.messagebox.showwarning(
                 "Verification Required", 
@@ -48,7 +49,8 @@ class MainWindow:
             return
 
         if self.on_process_callback:
-            self.on_process_callback(mapping, data)
+            # 🆕 Forward doc_type to the main callback
+            self.on_process_callback(mapping, data, doc_type)
 
     def run(self):
         self.root.mainloop()

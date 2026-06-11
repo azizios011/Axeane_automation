@@ -120,5 +120,6 @@ class CsvTableTab(ttk.Frame):
             return
         
         if self.on_process:
-            self.on_process(active_mapping, self.csv_data)
+            # 🆕 Pass self.current_doc_type as the 3rd argument
+            self.on_process(active_mapping, self.csv_data, self.current_doc_type)
             
