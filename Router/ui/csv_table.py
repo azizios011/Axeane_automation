@@ -3,8 +3,6 @@ from tkinter import ttk
 from typing import Callable
 from data.mappings import MAPPINGS, save_user_mappings
 
-# ── Define the exact columns to show in the preview table ────────────────────
-# Maps the "Clean UI Header" -> "Actual CSV Column Name"
 DISPLAY_COLUMNS = {
     "Client": "Client",
     "Operation": "Operation",
@@ -17,14 +15,15 @@ DISPLAY_COLUMNS = {
 }
 
 class CsvTableTab(ttk.Frame):
-    def __init__(self, parent, on_process: Callable[[dict, list[dict]], None]):
+    # 🆕 Added on_stop: Callable to the parameters
+    def __init__(self, parent, on_process: Callable, on_stop: Callable):
         super().__init__(parent)
         self.on_process = on_process
+        self.on_stop = on_stop
         self.current_doc_type = "Vente"
         self.csv_data: list[dict] = []
         self.headers: list[str] = []
         self.mapping_vars: dict[str, tk.StringVar] = {}
-
         self._build_ui()
 
     def load_data(self, doc_type: str, file_path: str, data: list[dict]):
@@ -64,15 +63,13 @@ class CsvTableTab(ttk.Frame):
         btn_frame.pack(fill=tk.X, padx=20, pady=10)
         
         ttk.Button(btn_frame, text="💾 Save Mapping Config", command=self._save_mapping).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="🚀 Process & Automate", command=self._process, style="Accent.TButton").pack(side=tk.RIGHT, padx=5)
-
-               # 🆕 Stop Button
+        
+        # 🆕 Stop Button
         self.stop_btn = ttk.Button(btn_frame, text="🛑 Stop Automation", command=self._stop, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.RIGHT, padx=5)
         
         self.process_btn = ttk.Button(btn_frame, text="🚀 Process & Automate", command=self._process, style="Accent.TButton")
         self.process_btn.pack(side=tk.RIGHT, padx=5)
-
 
     def _build_mapping_ui(self):
         for widget in self.mapping_frame.winfo_children():
@@ -96,7 +93,6 @@ class CsvTableTab(ttk.Frame):
     def _build_table_ui(self):
         self.tree.delete(*self.tree.get_children())
         
-        # Filter to only show the columns defined in DISPLAY_COLUMNS that actually exist in the CSV
         self.display_headers = [disp_name for disp_name, csv_col in DISPLAY_COLUMNS.items() if csv_col in self.headers]
         
         self.tree["columns"] = self.display_headers
@@ -104,11 +100,9 @@ class CsvTableTab(ttk.Frame):
 
         for col in self.display_headers:
             self.tree.heading(col, text=col)
-            # Make Client and Operation columns wider for better readability
             width = 180 if col in ["Client", "Operation"] else 100
             self.tree.column(col, width=width, anchor=tk.W)
 
-        # 🆕 Show ALL rows (removed the 100-row limit)
         for row in self.csv_data:
             values = [row.get(DISPLAY_COLUMNS[col], "") for col in self.display_headers]
             self.tree.insert("", tk.END, values=values)
@@ -121,7 +115,27 @@ class CsvTableTab(ttk.Frame):
         save_user_mappings(MAPPINGS)
         self.info_label.config(text="✅ Mapping configuration saved!", foreground="green")
 
-# 🆕 NEW: Method to update row colors live from the background thread
+    def _process(self):
+        active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
+        if not active_mapping:
+            self.info_label.config(text="❌ No columns mapped!", foreground="red")
+            return
+        
+        # Disable process button and enable stop button
+        self.process_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        
+        if self.on_process:
+            self.on_process(active_mapping, self.csv_data, self.current_doc_type)
+
+    # 🆕 NEW: Stop method
+    def _stop(self):
+        if self.on_stop:
+            self.on_stop()
+        self.stop_btn.config(state=tk.DISABLED)
+        self.process_btn.config(state=tk.NORMAL)
+        
+    # 🆕 NEW: Live row coloring method
     def update_row_color(self, ref: str, status: str):
         def _update():
             color_map = {
@@ -140,14 +154,4 @@ class CsvTableTab(ttk.Frame):
                     self.tree.see(item) # Auto-scroll to the active row
                     break
         self.after(0, _update) # Thread-safe UI update
-
-    def _process(self):
-        active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
-        if not active_mapping:
-            self.info_label.config(text="❌ No columns mapped!", foreground="red")
-            return
         
-        if self.on_process:
-            # 🆕 Pass self.current_doc_type as the 3rd argument
-            self.on_process(active_mapping, self.csv_data, self.current_doc_type)
-            
