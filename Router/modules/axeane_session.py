@@ -174,13 +174,19 @@ async def fill_header(page: Page, entry: dict) -> None:
     await wait(page)
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
-    # 🆕 1. Add new row via JS to completely bypass any overlay/interception issues
+    # 1. Add new row via JS if needed
     if idx > 0:
         await page.evaluate("document.querySelector(\"button[ng-click='ajouterEcriture()']\").click()")
-        await wait(page, 500)
+        await wait(page, 300)
+        # Wait for the new row to actually render in the DOM before interacting
+        await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=5000)
+
+    # 2. Get the specific row (needed for the Compte field which has a dynamic ID)
+    row = page.locator("tbody tr.td-row").nth(idx)
     
-    # 🆕 2. Fill Compte (Account) using Typeahead keyboard simulation (100% reliable for AngularJS)
-    compte_input = page.locator(f"#cc_0_{idx}")
+    # 3. Fill Compte (Account) using Typeahead keyboard simulation
+    # 🆕 The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
+    compte_input = row.locator("td.tc-cp input.form-control")
     await compte_input.scroll_into_view_if_needed()
     await compte_input.click()
     await compte_input.fill(line["account"])
@@ -192,7 +198,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     await page.keyboard.press("Enter")
     await wait(page, 400)
 
-    # 🆕 3. Fill Extra Libellé
+    # 4. Fill Extra Libellé (using stable ID)
     lb_input = page.locator(f"#exlibelle{idx}")
     await lb_input.scroll_into_view_if_needed()
     await lb_input.click()
@@ -200,7 +206,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     await page.keyboard.press("Tab")
     await wait(page, 300)
 
-    # 🆕 4. Fill Débit
+    # 5. Fill Débit (using stable ID)
     debit = float(line["debit"])
     if debit > 0:
         d_input = page.locator(f"#debit-eav-{idx}")
@@ -210,7 +216,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
         await page.keyboard.press("Tab")
         await wait(page, 300)
 
-    # 🆕 5. Fill Crédit
+    # 6. Fill Crédit (using stable ID)
     credit = float(line["credit"])
     if credit > 0:
         c_input = page.locator(f"#credit-eav-{idx}")
