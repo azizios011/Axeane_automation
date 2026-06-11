@@ -1,99 +1,124 @@
-from decimal import Decimal, ROUND_HALF_UP
-from functions.helpers import log, dec, tva_rate, is_cash, is_avoir, ZERO, MILLIME
-from data.config import (
-    SKIP_RE, ACC_CLIENT, ACC_CAISSE, ACC_HT_19, ACC_HT_7, ACC_TVA, ACC_ROUND,
-    LBL_CLIENT, LBL_CAISSE, LBL_HT_19, LBL_HT_7, LBL_TVA, LBL_ROUND
-)
+import tkinter as tk
+from tkinter import ttk
+from typing import Callable
+from data.mappings import MAPPINGS, save_user_mappings
 
-def parse_csv_with_mapping(mapping: dict, raw_data: list[dict]) -> list[dict]:
-    """Parse CSV data using a dynamic column mapping provided by the UI."""
-    
-    # 1. Normalize raw data keys to internal keys based on user mapping
-    normalized_rows = []
-    for row in raw_data:
-        norm_row = {}
-        for csv_col, internal_key in mapping.items():
-            val = row.get(csv_col, "")
-            if internal_key == "tva_rate":
-                norm_row[internal_key] = tva_rate(val)
-            elif internal_key in ("ttc", "net_ht", "tva_amt"):
-                norm_row[internal_key] = dec(val)
-            else:
-                norm_row[internal_key] = str(val).strip()
-        normalized_rows.append(norm_row)
+# ── Define the exact columns to show in the preview table ────────────────────
+# Maps the "Clean UI Header" -> "Actual CSV Column Name"
+DISPLAY_COLUMNS = {
+    "Client": "Client",
+    "Operation": "Operation",
+    "Ref": "Reference",
+    "Date": "Date",
+    "TTC": "TTC",
+    "HT": "Tot. Net. HT",
+    "Rate": "TVA %",
+    "TVA": "Montant TVA"
+}
 
-    # 2. Group by Reference (same logic as before)
-    groups: dict[str, list] = {}
-    for r in normalized_rows:
-        ref = r.get("ref", "").strip()
-        if SKIP_RE.search(r.get("client", "")) or SKIP_RE.search(ref) or not ref:
-            continue
-        groups.setdefault(ref, []).append(r)
+class CsvTableTab(ttk.Frame):
+    def __init__(self, parent, on_process: Callable[[dict, list[dict]], None]):
+        super().__init__(parent)
+        self.on_process = on_process
+        self.current_doc_type = "Vente"
+        self.csv_data: list[dict] = []
+        self.headers: list[str] = []
+        self.mapping_vars: dict[str, tk.StringVar] = {}
 
-    entries = []
-    for ref, rows in groups.items():
-        first = rows[0]
-        avoir = is_avoir(first.get("operation", ""))
-        cash = is_cash(first.get("client", ""))
-        ttc = abs(first.get("ttc", ZERO))
+        self._build_ui()
 
-        ht_by_rate: dict[Decimal, Decimal] = {}
-        tva_by_rate: dict[Decimal, Decimal] = {}
-        for r in rows:
-            rate = r.get("tva_rate", Decimal("19"))
-            ht_by_rate[rate] = ht_by_rate.get(rate, ZERO) + abs(r.get("net_ht", ZERO))
-            tva_by_rate[rate] = tva_by_rate.get(rate, ZERO) + abs(r.get("tva_amt", ZERO))
+    def load_data(self, doc_type: str, file_path: str, data: list[dict]):
+        self.current_doc_type = doc_type
+        self.csv_data = data
+        if not data:
+            return
+        
+        self.headers = list(data[0].keys())
+        self._build_mapping_ui()
+        self._build_table_ui()
 
-        lines = []
-        if not avoir:
-            acc = ACC_CAISSE if cash else ACC_CLIENT
-            lbl = LBL_CAISSE if cash else LBL_CLIENT
-            lines.append({"account": acc, "label": lbl, "debit": ttc, "credit": ZERO})
-            for rate, ht in ht_by_rate.items():
-                a = ACC_HT_7 if rate == Decimal("7") else ACC_HT_19
-                l = LBL_HT_7 if rate == Decimal("7") else LBL_HT_19
-                lines.append({"account": a, "label": l, "debit": ZERO, "credit": ht})
-            for rate, tva in tva_by_rate.items():
-                if tva > ZERO:
-                    lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": ZERO, "credit": tva})
-        else:
-            acc = ACC_CAISSE if cash else ACC_CLIENT
-            lbl = LBL_CAISSE if cash else LBL_CLIENT
-            lines.append({"account": acc, "label": lbl, "debit": ZERO, "credit": ttc})
-            for rate, ht in ht_by_rate.items():
-                a = ACC_HT_7 if rate == Decimal("7") else ACC_HT_19
-                l = LBL_HT_7 if rate == Decimal("7") else LBL_HT_19
-                lines.append({"account": a, "label": l, "debit": ht, "credit": ZERO})
-            for rate, tva in tva_by_rate.items():
-                if tva > ZERO:
-                    lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": tva, "credit": ZERO})
+    def _build_ui(self):
+        info_frame = ttk.Frame(self)
+        info_frame.pack(fill=tk.X, padx=20, pady=10)
+        self.info_label = ttk.Label(info_frame, text="Please import a file in the previous tab.", font=("Arial", 10, "bold"))
+        self.info_label.pack(side=tk.LEFT)
 
-        # ── Balance check + Timbre/Rounding patch ─────────────────────
-        total_d = sum(l["debit"] for l in lines)
-        total_c = sum(l["credit"] for l in lines)
-        diff = (total_d - total_c).quantize(MILLIME, rounding=ROUND_HALF_UP)
-        balanced = diff == ZERO
+        self.mapping_frame = ttk.LabelFrame(self, text="Column Mapping Configuration")
+        self.mapping_frame.pack(fill=tk.X, padx=20, pady=10)
 
-        # 🆕 Patch differences up to 5.000 TND (covers the 1.000 TND Timbre fiscal)
-        if not balanced and abs(diff) <= Decimal("5.000"):
-            if diff > ZERO:
-                # Debits > Credits, need more Credits (e.g., Timbre on a Facture)
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": abs(diff)})
-            else:
-                # Credits > Debits, need more Debits (e.g., Timbre on an Avoir)
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": abs(diff), "credit": ZERO})
-            balanced = True
+        table_frame = ttk.Frame(self)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-        entries.append({
-            "docRef": ref,
-            "date": first.get("date", ""),
-            "journal": "VT",
-            "libelle": f"{first.get('operation', 'FACTURE').upper()} {ref}",
-            "piece": ref,
-            "balanced": balanced,
-            "lines": lines,
-        })
+        v_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL)
+        h_scroll = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL)
+        
+        self.tree = ttk.Treeview(table_frame, yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+        v_scroll.config(command=self.tree.yview)
+        h_scroll.config(command=self.tree.xview)
 
-    log(f"Parsed {len(entries)} entries from CSV ({sum(1 for e in entries if not e['balanced'])} unbalanced)")
-    return entries
-    
+        v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=20, pady=10)
+        
+        ttk.Button(btn_frame, text="💾 Save Mapping Config", command=self._save_mapping).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="🚀 Process & Automate", command=self._process, style="Accent.TButton").pack(side=tk.RIGHT, padx=5)
+
+    def _build_mapping_ui(self):
+        for widget in self.mapping_frame.winfo_children():
+            widget.destroy()
+
+        self.mapping_vars = {}
+        current_defaults = MAPPINGS.get(self.current_doc_type, {})
+        target_fields = sorted(list(set(current_defaults.values())))
+        options = ["-- Ignore --"] + target_fields
+
+        for idx, header in enumerate(self.headers):
+            ttk.Label(self.mapping_frame, text=header, font=("Arial", 9, "bold")).grid(row=0, column=idx, padx=5, pady=5)
+            
+            default_val = current_defaults.get(header, "-- Ignore --")
+            var = tk.StringVar(value=default_val)
+            self.mapping_vars[header] = var
+            
+            combo = ttk.Combobox(self.mapping_frame, textvariable=var, values=options, state="readonly", width=14)
+            combo.grid(row=1, column=idx, padx=5, pady=5)
+
+    def _build_table_ui(self):
+        self.tree.delete(*self.tree.get_children())
+        
+        # Filter to only show the columns defined in DISPLAY_COLUMNS that actually exist in the CSV
+        self.display_headers = [disp_name for disp_name, csv_col in DISPLAY_COLUMNS.items() if csv_col in self.headers]
+        
+        self.tree["columns"] = self.display_headers
+        self.tree["show"] = "headings"
+
+        for col in self.display_headers:
+            self.tree.heading(col, text=col)
+            # Make Client and Operation columns wider for better readability
+            width = 180 if col in ["Client", "Operation"] else 100
+            self.tree.column(col, width=width, anchor=tk.W)
+
+        # 🆕 Show ALL rows (removed the 100-row limit)
+        for row in self.csv_data:
+            values = [row.get(DISPLAY_COLUMNS[col], "") for col in self.display_headers]
+            self.tree.insert("", tk.END, values=values)
+
+        self.info_label.config(text=f"Loaded: {self.current_doc_type} ({len(self.csv_data)} total rows)")
+
+    def _save_mapping(self):
+        active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
+        MAPPINGS[self.current_doc_type] = active_mapping
+        save_user_mappings(MAPPINGS)
+        self.info_label.config(text="✅ Mapping configuration saved!", foreground="green")
+
+    def _process(self):
+        active_mapping = {h: var.get() for h, var in self.mapping_vars.items() if var.get() != "-- Ignore --"}
+        if not active_mapping:
+            self.info_label.config(text="❌ No columns mapped!", foreground="red")
+            return
+        
+        if self.on_process:
+            self.on_process(active_mapping, self.csv_data)
+            
