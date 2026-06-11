@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 cdp_user_data/
 Router/data/settings.json
+Router/data/user_mappings.json
