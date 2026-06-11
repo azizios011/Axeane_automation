@@ -133,6 +133,8 @@ async def navigate_to_saisie(page: Page) -> None:
     
     log("✅ Saisie des écritures opened")
 
+# ... (keep wait, nya_select_by_js, get_current_context, do_login, select_context, navigate_to_saisie as they were) ...
+
 async def fill_header(page: Page, entry: dict) -> None:
     date = entry["date"]
     month = int(date.split("/")[1])
@@ -142,7 +144,10 @@ async def fill_header(page: Page, entry: dict) -> None:
     await d.click(); await d.fill(date); await d.press("Tab")
     await wait(page)
     
-    await nya_select_by_js(page, "jo-eav", entry["journal"])
+    # 🆕 Override Journal to "CA" if the formula dictated a cash transaction
+    journal_code = "CA" if entry.get("is_cash") else entry["journal"]
+    await nya_select_by_js(page, "jo-eav", journal_code)
+    
     await nya_select_by_js(page, "inputMoisIdEcriture", ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month])
     
     j = page.locator("#inputJourIdEcritureAv")
@@ -157,6 +162,7 @@ async def fill_header(page: Page, entry: dict) -> None:
     await lb.click(); await lb.fill(entry["libelle"]); await lb.press("Tab")
     await wait(page)
 
+# ... (keep fill_line, save_entry, reset_form, run as they were) ...
 async def fill_line(page: Page, idx: int, line: dict) -> None:
     if idx > 0:
         await page.locator("button[ng-click='ajouterEcriture()']").click()

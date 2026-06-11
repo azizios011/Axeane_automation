@@ -1,25 +1,21 @@
 from decimal import Decimal, ROUND_HALF_UP
-from functions.helpers import log, dec, tva_rate, is_cash, is_avoir, ZERO, MILLIME
-from data.config import (
-    SKIP_RE, ACC_CLIENT, ACC_CAISSE, ACC_HT_19, ACC_HT_7, ACC_TVA, ACC_ROUND,
-    LBL_CLIENT, LBL_CAISSE, LBL_HT_19, LBL_HT_7, LBL_TVA, LBL_ROUND
-)
+from functions.helpers import log, dec, tva_rate, is_cash as is_cash_client, is_avoir, ZERO, MILLIME
+from data.config import SKIP_RE
+from data.formulas import FORMULAS
 
-# 🆕 Add doc_type: str to the parameters
-def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -> list[dict]:
-    """Parse CSV data using a dynamic column mapping provided by the UI."""
-    
-    # 🆕 Map document type to Axeane Journal Code
-    journal_map = {
-        "Vente": "VT",
-        "Achat": "AC",
-        "Bank": "BQ",
-        "OD": "OD",
-        "Caisse": "CA"
+def get_formula(client_name: str) -> dict:
+    client_name = client_name.upper()
+    for f in FORMULAS:
+        if f["client_match"].upper() in client_name or client_name in f["client_match"].upper():
+            return f
+    # Default fallback if no match
+    return FORMULAS[0] if FORMULAS else {
+        "compte_client": "411000", "compte_tva_19": "436710", "compte_ht_19": "707019",
+        "use_timbre": True, "compte_timbre": "736000", "use_7_percent": False,
+        "compte_tva_7": "436707", "compte_ht_7": "707007", "use_cash": False, "compte_caisse": "541100"
     }
-    journal_code = journal_map.get(doc_type, "VT")
-    
-    # 1. Normalize raw data keys to internal keys based on user mapping
+
+def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -> list[dict]:
     normalized_rows = []
     for row in raw_data:
         norm_row = {}
@@ -33,7 +29,6 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
                 norm_row[internal_key] = str(val).strip()
         normalized_rows.append(norm_row)
 
-    # 2. Group by Reference
     groups: dict[str, list] = {}
     for r in normalized_rows:
         ref = r.get("ref", "").strip()
@@ -45,9 +40,12 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
     for ref, rows in groups.items():
         first = rows[0]
         avoir = is_avoir(first.get("operation", ""))
-        cash = is_cash(first.get("client", ""))
+        cash_client = is_cash_client(first.get("client", ""))
         ttc = abs(first.get("ttc", ZERO))
-
+        
+        formula = get_formula(first.get("client", ""))
+        is_cash_entry = formula.get("use_cash", False) or cash_client
+        
         ht_by_rate: dict[Decimal, Decimal] = {}
         tva_by_rate: dict[Decimal, Decimal] = {}
         for r in rows:
@@ -56,30 +54,55 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
             tva_by_rate[rate] = tva_by_rate.get(rate, ZERO) + abs(r.get("tva_amt", ZERO))
 
         lines = []
+        
         if not avoir:
-            acc = ACC_CAISSE if cash else ACC_CLIENT
-            lbl = LBL_CAISSE if cash else LBL_CLIENT
-            lines.append({"account": acc, "label": lbl, "debit": ttc, "credit": ZERO})
+            # ── FACTURE ──────────────────────────────────────────────
+            if is_cash_entry:
+                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ttc, "credit": ZERO})
+                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
+            else:
+                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
+                
+            if formula.get("use_timbre"):
+                lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": ZERO, "credit": Decimal("1.000")})
+                
             for rate, ht in ht_by_rate.items():
-                a = ACC_HT_7 if rate == Decimal("7") else ACC_HT_19
-                l = LBL_HT_7 if rate == Decimal("7") else LBL_HT_19
-                lines.append({"account": a, "label": l, "debit": ZERO, "credit": ht})
+                if rate == Decimal("7") and formula.get("use_7_percent"):
+                    lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ZERO, "credit": ht})
+                else:
+                    lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ZERO, "credit": ht})
+                    
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
-                    lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": ZERO, "credit": tva})
+                    if rate == Decimal("7") and formula.get("use_7_percent"):
+                        lines.append({"account": formula["compte_tva_7"], "label": "TVA 7%", "debit": ZERO, "credit": tva})
+                    else:
+                        lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": ZERO, "credit": tva})
         else:
-            acc = ACC_CAISSE if cash else ACC_CLIENT
-            lbl = LBL_CAISSE if cash else LBL_CLIENT
-            lines.append({"account": acc, "label": lbl, "debit": ZERO, "credit": ttc})
+            # ── AVOIR (Exact Opposite) ───────────────────────────────
+            if is_cash_entry:
+                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ZERO, "credit": ttc})
+                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
+            else:
+                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
+                
+            if formula.get("use_timbre"):
+                lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": Decimal("1.000"), "credit": ZERO})
+                
             for rate, ht in ht_by_rate.items():
-                a = ACC_HT_7 if rate == Decimal("7") else ACC_HT_19
-                l = LBL_HT_7 if rate == Decimal("7") else LBL_HT_19
-                lines.append({"account": a, "label": l, "debit": ht, "credit": ZERO})
+                if rate == Decimal("7") and formula.get("use_7_percent"):
+                    lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ht, "credit": ZERO})
+                else:
+                    lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ht, "credit": ZERO})
+                    
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
-                    lines.append({"account": ACC_TVA, "label": LBL_TVA, "debit": tva, "credit": ZERO})
+                    if rate == Decimal("7") and formula.get("use_7_percent"):
+                        lines.append({"account": formula["compte_tva_7"], "label": "TVA 7%", "debit": tva, "credit": ZERO})
+                    else:
+                        lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": tva, "credit": ZERO})
 
-        # ── Balance check + Timbre/Rounding patch ─────────────────────
+        # ── Balance check + Rounding patch (Ensures Solde = 0) ───────
         total_d = sum(l["debit"] for l in lines)
         total_c = sum(l["credit"] for l in lines)
         diff = (total_d - total_c).quantize(MILLIME, rounding=ROUND_HALF_UP)
@@ -87,34 +110,29 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
 
         if not balanced and abs(diff) <= Decimal("5.000"):
             if diff > ZERO:
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": abs(diff)})
+                lines.append({"account": "736000", "label": "AJUST ARRONDI", "debit": ZERO, "credit": abs(diff)})
             else:
-                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": abs(diff), "credit": ZERO})
+                lines.append({"account": "736000", "label": "AJUST ARRONDI", "debit": abs(diff), "credit": ZERO})
             balanced = True
 
-        # 🆕 Extract Piece (Reference without the year)
-        # e.g., "AC000019/2026" -> "AC000019"
-        piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
-
-        # 🆕 Extract Libellé (Client name without the code)
-        # e.g., "C000262 | WLED NEMELA AUTO" -> "WLED NEMELA AUTO"
         client_raw = first.get("client", "")
-        if "|" in client_raw:
-            client_name = client_raw.split("|", 1)[1].strip()
-        else:
-            client_name = client_raw.strip()
+        libelle = client_raw.split("|", 1)[-1].strip().upper() if "|" in client_raw else client_raw.strip().upper()
+        piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
         
-        libelle = client_name.upper()
+        # Determine Journal: CA if cash, else VT for Vente, AC for Achat
+        journal_code = "CA" if is_cash_entry else ("VT" if doc_type == "Vente" else "AC")
 
         entries.append({
             "docRef": ref,
             "date": first.get("date", ""),
-            "journal": journal_code,  # 🆕 Dynamic journal code (VT, AC, BQ)
-            "libelle": libelle,       # 🆕 Clean client name
-            "piece": piece,           # 🆕 Reference without year
+            "journal": journal_code,
+            "libelle": libelle,
+            "piece": piece,
             "balanced": balanced,
             "lines": lines,
+            "is_cash": is_cash_entry # Flag for UI automation
         })
 
     log(f"Parsed {len(entries)} entries from CSV ({sum(1 for e in entries if not e['balanced'])} unbalanced)")
     return entries
+    
