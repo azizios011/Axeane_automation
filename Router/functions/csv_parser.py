@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from functions.helpers import log, dec, tva_rate, is_cash, is_avoir, ZERO, MILLIME
 from data.config import (
     SKIP_RE, ACC_CLIENT, ACC_CAISSE, ACC_HT_19, ACC_HT_7, ACC_TVA, ACC_ROUND,
