@@ -30,28 +30,6 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
         log(f"  WARNING: option '{option_text}' not found in #{ol_id}")
     await wait(page)
 
-async def get_current_context(page: Page) -> tuple[str, str]:
-    """Reads the currently selected Entreprise and Exercice directly from the UI."""
-    # 1. Try reading from sidebar dropdowns (always in DOM, immune to responsive CSS hiding)
-    try:
-        ent = await page.evaluate("document.querySelector('#entreprise .filter-option span')?.textContent?.trim()")
-        exe = await page.evaluate("document.querySelector('#exercice .filter-option span')?.textContent?.trim()")
-        if ent and exe and ent != 'Entreprise...' and exe != 'Exercice...':
-            return ent, exe
-    except Exception:
-        pass
-        
-    # 2. Fallback to header chips (if screen is wide enough)
-    try:
-        ent = await page.locator(".ctx-chip-entreprise .ctx-chip-text").text_content(timeout=3000)
-        exe = await page.locator(".ctx-chip-exercice .ctx-chip-text").text_content(timeout=3000)
-        if ent and exe:
-            return ent.strip(), exe.strip()
-    except Exception:
-        pass
-        
-    return "Unknown", "Unknown"
-
 async def do_login(page: Page) -> None:
     if await page.locator("#loginInput").count() == 0:
         log("Already logged in")
@@ -84,17 +62,46 @@ async def do_login(page: Page) -> None:
         raise RuntimeError("Login failed — check credentials")
     await wait(page, 1000)
 
-async def navigate_to_saisie(page: Page) -> None:
-    log("Navigating to Saisie des écritures...")
+# 🆕 UPDATED: Reads directly from settings.json
+async def select_context(page: Page) -> None:
+    entreprise = SETTINGS.get("axeane_entreprise", "CPR")
+    exercice = SETTINGS.get("axeane_exercice", "EX 2026")
     
-    # 1. Open sidebar if not active (using JS to avoid overlay interception)
+    if not entreprise or not exercice:
+        log("⚠️ Enterprise or Exercice not defined in settings. Skipping automatic selection.")
+        return
+        
+    log(f"Selecting context: {entreprise} / {exercice}")
+    
+    # Open sidebar if not active (using JS to avoid overlay interception)
     is_open = await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')")
     if not is_open:
         log("  Sidebar is collapsed. Opening it via JS...")
         await page.evaluate("document.getElementById('menuBtn').click()")
         await wait(page, 800)
+
+    await nya_select_by_js(page, "entreprise", entreprise)
+    await wait(page, 800)
+    await nya_select_by_js(page, "exercice", exercice)
+    await wait(page, 800)
     
-    # 2. Click "Comptabilité générale" in the sidebar menu
+    # Close sidebar after selection to clean up the UI
+    is_open_after = await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')")
+    if is_open_after:
+        await page.evaluate("document.getElementById('menuBtn').click()")
+        await wait(page, 500)
+
+async def navigate_to_saisie(page: Page) -> None:
+    log("Navigating to Saisie des écritures...")
+    
+    # 1. Ensure the main sidebar is open
+    sidebar = page.locator(".axe-sidebar.nax-side-bar-menu-active")
+    if await sidebar.count() == 0:
+        log("  Sidebar is collapsed. Opening it...")
+        await page.evaluate("document.getElementById('menuBtn').click()")
+        await wait(page, 800)
+    
+    # 2. Click "Comptabilité générale" specifically inside the sidebar
     log("  Clicking 'Comptabilité générale'...")
     clicked_menu = await page.evaluate("""() => {
         const items = document.querySelectorAll('.nax-main-menu-item span.ng-binding');
@@ -213,15 +220,9 @@ async def run(entries: list[dict]) -> None:
 
         await do_login(page)
         
-        # Dynamically detect context from the browser (reads sidebar dropdowns or header chips)
-        entreprise, exercice = await get_current_context(page)
-        log(f"✅ Detected Browser Context: {entreprise} / {exercice}")
+        # 🆕 Actively selects the context defined in settings.json
+        await select_context(page) 
         
-        if entreprise == "Unknown" or exercice == "Unknown":
-            log("⚠️ WARNING: Could not detect context. Please ensure it's correct in the browser.")
-        else:
-            log(f"  Using context: {entreprise} / {exercice}")
-
         await navigate_to_saisie(page)
 
         total = len(entries)

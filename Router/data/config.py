@@ -9,6 +9,8 @@ DEFAULT_SETTINGS = {
     "cdp_url": "http://localhost:9222",
     "axeane_user": "RIHAB1",
     "axeane_password": "",
+    "axeane_entreprise": "CPR",       # 🆕 Added
+    "axeane_exercice": "EX 2026",     # 🆕 Added
     "slow_mo": 300
 }
 
@@ -17,7 +19,6 @@ def load_settings() -> dict:
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                # Merge with defaults to ensure backward compatibility if new keys are added later
                 return {**DEFAULT_SETTINGS, **saved}
         except Exception:
             pass
@@ -27,9 +28,7 @@ def save_settings(settings: dict):
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4)
 
-# Global settings object loaded at startup
 SETTINGS = load_settings()
-
 
 # ── PCT accounts ─────────────────────────────────────────────────────────────
 ACC_CLIENT = "411000"

@@ -21,7 +21,6 @@ class PwaSettingsTab(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         
-        # Extract port from cdp_url for the UI
         default_port = "9222"
         try:
             default_port = SETTINGS.get("cdp_url", "").split(":")[-1] or "9222"
@@ -31,18 +30,21 @@ class PwaSettingsTab(ttk.Frame):
         self.cdp_port = tk.StringVar(value=default_port)
         self.user = tk.StringVar(value=SETTINGS.get("axeane_user", "RIHAB1"))
         self.password = tk.StringVar(value=SETTINGS.get("axeane_password", ""))
+        
+        # 🆕 Enterprise & Exercice Variables
+        self.entreprise = tk.StringVar(value=SETTINGS.get("axeane_entreprise", "CPR"))
+        self.exercice = tk.StringVar(value=SETTINGS.get("axeane_exercice", "EX 2026"))
+        
         self.slow_mo = tk.StringVar(value=str(SETTINGS.get("slow_mo", 300)))
         self.browser_path = tk.StringVar(value=get_default_browser())
         
         self.is_verified = False
-        self.detected_entreprise = tk.StringVar(value="Not detected")
-        self.detected_exercice = tk.StringVar(value="Not detected")
 
         self._build_ui()
 
     def _build_ui(self):
         # ── Connection & Credentials ──────────────────────────────────────────
-        config_frame = ttk.LabelFrame(self, text="⚙️ Connection & Credentials")
+        config_frame = ttk.LabelFrame(self, text="⚙️ Connection & Context Configuration")
         config_frame.pack(fill=tk.X, padx=20, pady=10)
 
         ttk.Label(config_frame, text="Browser Executable:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
@@ -58,23 +60,20 @@ class PwaSettingsTab(ttk.Frame):
         ttk.Label(config_frame, text="Axeane Password:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
         ttk.Entry(config_frame, textvariable=self.password, width=20, show="*").grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
 
-        ttk.Label(config_frame, text="Automation Delay (ms):").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
-        ttk.Entry(config_frame, textvariable=self.slow_mo, width=10).grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+        # 🆕 NEW: Enterprise & Exercice Fields
+        ttk.Separator(config_frame, orient=tk.HORIZONTAL).grid(row=4, column=0, columnspan=3, sticky=tk.EW, pady=10)
+        ttk.Label(config_frame, text="🏢 Axeane Enterprise:", font=("Arial", 9, "bold")).grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.entreprise, width=20).grid(row=5, column=1, sticky=tk.W, padx=5, pady=5)
 
-        ttk.Button(config_frame, text="💾 Save Settings", command=self._save_settings).grid(row=5, column=1, sticky=tk.E, padx=5, pady=10)
+        ttk.Label(config_frame, text="📅 Axeane Exercice:", font=("Arial", 9, "bold")).grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.exercice, width=20).grid(row=6, column=1, sticky=tk.W, padx=5, pady=5)
 
-        # ── Context Detection ─────────────────────────────────────────────────
-        context_frame = ttk.LabelFrame(self, text="🏢 Current Browser Context (Auto-Detected)")
-        context_frame.pack(fill=tk.X, padx=20, pady=10)
+        ttk.Separator(config_frame, orient=tk.HORIZONTAL).grid(row=7, column=0, columnspan=3, sticky=tk.EW, pady=10)
+        
+        ttk.Label(config_frame, text="Automation Delay (ms):").grid(row=8, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Entry(config_frame, textvariable=self.slow_mo, width=10).grid(row=8, column=1, sticky=tk.W, padx=5, pady=5)
 
-        ttk.Label(context_frame, text="Entreprise:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        ttk.Label(context_frame, textvariable=self.detected_entreprise, font=("Arial", 10, "bold"), foreground="#2563EB").grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
-
-        ttk.Label(context_frame, text="Exercice:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        ttk.Label(context_frame, textvariable=self.detected_exercice, font=("Arial", 10, "bold"), foreground="#2563EB").grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
-
-        self.detect_btn = ttk.Button(context_frame, text="🔄 Detect from Browser", command=self._detect_context)
-        self.detect_btn.grid(row=2, column=0, columnspan=2, pady=10)
+        ttk.Button(config_frame, text="💾 Save Settings", command=self._save_settings).grid(row=9, column=1, sticky=tk.E, padx=5, pady=10)
 
         # ── Actions & Status ──────────────────────────────────────────────────
         action_frame = ttk.Frame(self)
@@ -115,6 +114,8 @@ class PwaSettingsTab(ttk.Frame):
                 "cdp_url": f"http://localhost:{port}",
                 "axeane_user": self.user.get(),
                 "axeane_password": self.password.get(),
+                "axeane_entreprise": self.entreprise.get(), # 🆕 Saved
+                "axeane_exercice": self.exercice.get(),     # 🆕 Saved
                 "slow_mo": int(self.slow_mo.get())
             }
             save_settings(new_settings)
@@ -126,53 +127,6 @@ class PwaSettingsTab(ttk.Frame):
             messagebox.showerror("Error", "Automation Delay must be a valid number.")
         except Exception as e:
             self._log(f"❌ Failed to save settings: {e}")
-
-    def _detect_context(self):
-        self.detect_btn.config(state=tk.DISABLED)
-        self._log("🔍 Connecting to browser to detect AngularJS context...")
-        
-        def run_async_detect():
-            port = self.cdp_port.get()
-            cdp_url = f"http://localhost:{port}"
-            
-            async def detect():
-                try:
-                    from playwright.async_api import async_playwright
-                    async with async_playwright() as p:
-                        browser = await p.chromium.connect_over_cdp(cdp_url)
-                        pages = [p for ctx in browser.contexts for p in ctx.pages]
-                        page = next((p for p in pages if "axeane" in p.url.lower() or "kompta" in p.url.lower()), None)
-                        
-                        if not page:
-                            self._log_safe("❌ No Axeane page found. Please open it in the browser first.")
-                            self._update_context_safe("Not found", "Not found")
-                            return
-
-                        # Read directly from the AngularJS DOM chips
-                        context = await page.evaluate("""() => {
-                            const entEl = document.querySelector('.ctx-chip-entreprise .ctx-chip-text');
-                            const exeEl = document.querySelector('.ctx-chip-exercice .ctx-chip-text');
-                            return {
-                                entreprise: entEl ? entEl.textContent.trim() : 'Unknown',
-                                exercice: exeEl ? exeEl.textContent.trim() : 'Unknown'
-                            };
-                        }""")
-                        
-                        ent = context.get("entreprise", "Unknown")
-                        exe = context.get("exercice", "Unknown")
-                        
-                        self._log_safe(f"✅ Detected: Entreprise='{ent}', Exercice='{exe}'")
-                        self._update_context_safe(ent, exe)
-                        
-                except Exception as e:
-                    self._log_safe(f"❌ Detection failed: {e}")
-                    self._update_context_safe("Error", "Error")
-                finally:
-                    self._reset_detect_btn_safe()
-
-            asyncio.run(detect())
-
-        threading.Thread(target=run_async_detect, daemon=True).start()
 
     def _launch_browser(self):
         port = self.cdp_port.get()
@@ -253,13 +207,7 @@ class PwaSettingsTab(ttk.Frame):
         self.console_text.config(state=tk.DISABLED)
 
     def _log_safe(self, msg: str): self.after(0, lambda: self._log(msg))
-    def _update_context_safe(self, ent: str, exe: str): self.after(0, lambda: self._set_context(ent, exe))
     def _update_status_safe(self, text: str, color: str): self.after(0, lambda: self._set_status(text, color))
-    def _reset_detect_btn_safe(self): self.after(0, lambda: self.detect_btn.config(state=tk.NORMAL))
-
-    def _set_context(self, ent: str, exe: str):
-        self.detected_entreprise.set(ent)
-        self.detected_exercice.set(exe)
 
     def _set_status(self, text: str, color: str):
         self.status_var.set(text)
