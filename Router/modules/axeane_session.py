@@ -30,6 +30,23 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
         log(f"  WARNING: option '{option_text}' not found in #{ol_id}")
     await wait(page)
 
+async def get_current_context(page: Page) -> tuple[str, str]:
+    """Reads the currently selected Entreprise and Exercice directly from the UI."""
+    try:
+        await page.wait_for_selector(".ctx-chip-entreprise .ctx-chip-text", timeout=10000)
+        context = await page.evaluate("""() => {
+            const entEl = document.querySelector('.ctx-chip-entreprise .ctx-chip-text');
+            const exeEl = document.querySelector('.ctx-chip-exercice .ctx-chip-text');
+            return {
+                entreprise: entEl ? entEl.textContent.trim() : 'Unknown',
+                exercice: exeEl ? exeEl.textContent.trim() : 'Unknown'
+            };
+        }""")
+        return context.get("entreprise", "Unknown"), context.get("exercice", "Unknown")
+    except Exception as e:
+        log(f"Warning: Could not detect context: {e}")
+        return "Unknown", "Unknown"
+
 async def do_login(page: Page) -> None:
     if await page.locator("#loginInput").count() == 0:
         log("Already logged in")
@@ -62,7 +79,6 @@ async def do_login(page: Page) -> None:
         raise RuntimeError("Login failed — check credentials")
     await wait(page, 1000)
 
-# 🆕 UPDATED: Reads directly from settings.json
 async def select_context(page: Page) -> None:
     entreprise = SETTINGS.get("axeane_entreprise", "CPR")
     exercice = SETTINGS.get("axeane_exercice", "EX 2026")
@@ -73,7 +89,6 @@ async def select_context(page: Page) -> None:
         
     log(f"Selecting context: {entreprise} / {exercice}")
     
-    # Open sidebar if not active (using JS to avoid overlay interception)
     is_open = await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')")
     if not is_open:
         log("  Sidebar is collapsed. Opening it via JS...")
@@ -85,7 +100,6 @@ async def select_context(page: Page) -> None:
     await nya_select_by_js(page, "exercice", exercice)
     await wait(page, 800)
     
-    # Close sidebar after selection to clean up the UI
     is_open_after = await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')")
     if is_open_after:
         await page.evaluate("document.getElementById('menuBtn').click()")
@@ -94,14 +108,12 @@ async def select_context(page: Page) -> None:
 async def navigate_to_saisie(page: Page) -> None:
     log("Navigating to Saisie des écritures...")
     
-    # 1. Ensure the main sidebar is open
     sidebar = page.locator(".axe-sidebar.nax-side-bar-menu-active")
     if await sidebar.count() == 0:
         log("  Sidebar is collapsed. Opening it...")
         await page.evaluate("document.getElementById('menuBtn').click()")
         await wait(page, 800)
     
-    # 2. Click "Comptabilité générale" specifically inside the sidebar
     log("  Clicking 'Comptabilité générale'...")
     clicked_menu = await page.evaluate("""() => {
         const items = document.querySelectorAll('.nax-main-menu-item span.ng-binding');
@@ -117,7 +129,6 @@ async def navigate_to_saisie(page: Page) -> None:
         log("  WARNING: Could not find 'Comptabilité générale' in sidebar.")
     await wait(page, 1000)
     
-    # 3. Click "Saisie des écritures" in the dock panel
     log("  Clicking 'Saisie des écritures'...")
     clicked_saisie = await page.evaluate("""() => {
         const item = document.querySelector(".kc-dock-item[data-code='ECRITURE_AVANCEE']");
@@ -133,70 +144,84 @@ async def navigate_to_saisie(page: Page) -> None:
     
     log("✅ Saisie des écritures opened")
 
-# ... (keep wait, nya_select_by_js, get_current_context, do_login, select_context, navigate_to_saisie as they were) ...
-
 async def fill_header(page: Page, entry: dict) -> None:
     date = entry["date"]
     month = int(date.split("/")[1])
     jour = date.split("/")[0]
     
     d = page.locator("#ec-date-creation")
+    await d.scroll_into_view_if_needed()
     await d.click(); await d.fill(date); await d.press("Tab")
     await wait(page)
     
-    # 🆕 Override Journal to "CA" if the formula dictated a cash transaction
     journal_code = "CA" if entry.get("is_cash") else entry["journal"]
     await nya_select_by_js(page, "jo-eav", journal_code)
-    
     await nya_select_by_js(page, "inputMoisIdEcriture", ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month])
     
     j = page.locator("#inputJourIdEcritureAv")
+    await j.scroll_into_view_if_needed()
     await j.click(); await j.fill(jour); await j.press("Tab")
     await wait(page)
     
     p = page.locator("#idDocumentInputMD2")
+    await p.scroll_into_view_if_needed()
     await p.click(); await p.fill(entry["piece"]); await p.press("Tab")
     await wait(page)
     
     lb = page.locator("#inputLibelleIdMD2")
+    await lb.scroll_into_view_if_needed()
     await lb.click(); await lb.fill(entry["libelle"]); await lb.press("Tab")
     await wait(page)
 
-# ... (keep fill_line, save_entry, reset_form, run as they were) ...
 async def fill_line(page: Page, idx: int, line: dict) -> None:
+    # 🆕 1. Add new row via JS to completely bypass any overlay/interception issues
     if idx > 0:
-        await page.locator("button[ng-click='ajouterEcriture()']").click()
-        await wait(page, 400)
+        await page.evaluate("document.querySelector(\"button[ng-click='ajouterEcriture()']\").click()")
+        await wait(page, 500)
     
-    compte = page.locator(f"#cc_0_{idx}")
-    await compte.click()
-    await compte.fill(line["account"])
-    await wait(page, 700)
+    # 🆕 2. Fill Compte (Account) using Typeahead keyboard simulation (100% reliable for AngularJS)
+    compte_input = page.locator(f"#cc_0_{idx}")
+    await compte_input.scroll_into_view_if_needed()
+    await compte_input.click()
+    await compte_input.fill(line["account"])
+    await wait(page, 300)
     
-    try:
-        await page.wait_for_selector(".dropdown-menu.ng-scope li.nya-bs-option:not(.no-search-result), ul.dropdown-menu li:not(.no-search-result)", timeout=2500)
-        await page.locator(".dropdown-menu.ng-scope li:not(.no-search-result), ul.dropdown-menu li:not(.no-search-result)").first.click()
-    except PWTimeout:
-        await compte.press("Tab")
-    await wait(page)
+    # Select the first typeahead suggestion and confirm with Enter
+    await page.keyboard.press("ArrowDown")
+    await wait(page, 100)
+    await page.keyboard.press("Enter")
+    await wait(page, 400)
 
-    lb = page.locator(f"#exlibelle{idx}")
-    await lb.click(); await lb.fill(line["label"]); await lb.press("Tab")
-    await wait(page)
+    # 🆕 3. Fill Extra Libellé
+    lb_input = page.locator(f"#exlibelle{idx}")
+    await lb_input.scroll_into_view_if_needed()
+    await lb_input.click()
+    await lb_input.fill(line["label"])
+    await page.keyboard.press("Tab")
+    await wait(page, 300)
 
+    # 🆕 4. Fill Débit
     debit = float(line["debit"])
     if debit > 0:
-        d = page.locator(f"#debit-eav-{idx}")
-        await d.click(); await d.fill(f"{debit:.3f}"); await d.press("Tab")
-        await wait(page)
+        d_input = page.locator(f"#debit-eav-{idx}")
+        await d_input.scroll_into_view_if_needed()
+        await d_input.click()
+        await d_input.fill(f"{debit:.3f}")
+        await page.keyboard.press("Tab")
+        await wait(page, 300)
 
+    # 🆕 5. Fill Crédit
     credit = float(line["credit"])
     if credit > 0:
-        c = page.locator(f"#credit-eav-{idx}")
-        await c.click(); await c.fill(f"{credit:.3f}"); await c.press("Tab")
-        await wait(page)
+        c_input = page.locator(f"#credit-eav-{idx}")
+        await c_input.scroll_into_view_if_needed()
+        await c_input.click()
+        await c_input.fill(f"{credit:.3f}")
+        await page.keyboard.press("Tab")
+        await wait(page, 300)
 
 async def save_entry(page: Page) -> None:
+    await page.locator("#ec-save").scroll_into_view_if_needed()
     await page.locator("#ec-save").click()
     await wait(page, 1500)
 
@@ -226,9 +251,15 @@ async def run(entries: list[dict]) -> None:
 
         await do_login(page)
         
-        # 🆕 Actively selects the context defined in settings.json
-        await select_context(page) 
+        entreprise, exercice = await get_current_context(page)
+        log(f"✅ Detected Browser Context: {entreprise} / {exercice}")
         
+        if entreprise == "Unknown" or exercice == "Unknown":
+            log("⚠️ WARNING: Could not detect context. Please ensure it's correct in the browser.")
+        else:
+            log(f"  Using context: {entreprise} / {exercice}")
+
+        await select_context(page)
         await navigate_to_saisie(page)
 
         total = len(entries)
