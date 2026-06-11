@@ -33,6 +33,9 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the Axeane UI."""
     try:
+        # 🆕 Wait for the context chips to actually render in the DOM
+        await page.wait_for_selector(".ctx-chip-entreprise .ctx-chip-text", timeout=10000)
+        
         context = await page.evaluate("""() => {
             const entEl = document.querySelector('.ctx-chip-entreprise .ctx-chip-text');
             const exeEl = document.querySelector('.ctx-chip-exercice .ctx-chip-text');
@@ -91,11 +94,29 @@ async def select_context(page: Page, entreprise: str, exercice: str) -> None:
 
 async def navigate_to_saisie(page: Page) -> None:
     log("Navigating to Saisie des écritures...")
-    await page.locator("span.ng-binding:text('Comptabilité générale')").first.click()
-    await wait(page, 600)
-    await page.locator(".kc-dock-item[data-code='ECRITURE_AVANCEE']").click()
+    
+    # 🆕 1. Ensure the main sidebar is open (it has the 'nax-side-bar-menu-active' class when open)
+    sidebar = page.locator(".axe-sidebar.nax-side-bar-menu-active")
+    if await sidebar.count() == 0:
+        log("  Sidebar is collapsed. Opening it...")
+        await page.locator("#menuBtn").click()
+        await wait(page, 800)
+    
+    # 🆕 2. Click "Comptabilité générale" specifically inside the sidebar
+    log("  Clicking 'Comptabilité générale'...")
+    comptabilite_menu = page.locator(".axe-sidebar span.ng-binding:text('Comptabilité générale')").first
+    await comptabilite_menu.scroll_into_view_if_needed()
+    await comptabilite_menu.click()
+    await wait(page, 800)
+    
+    # 🆕 3. Click "Saisie des écritures" in the expanded dock panel
+    log("  Clicking 'Saisie des écritures'...")
+    saisie_menu = page.locator(".kc-dock-item[data-code='ECRITURE_AVANCEE']")
+    await saisie_menu.scroll_into_view_if_needed()
+    await saisie_menu.click()
     await wait(page, 1500)
-    log("Saisie des écritures opened")
+    
+    log("✅ Saisie des écritures opened")
 
 async def fill_header(page: Page, entry: dict) -> None:
     date = entry["date"]
@@ -184,7 +205,7 @@ async def run(entries: list[dict]) -> None:
 
         await do_login(page)
         
-        # 🆕 Dynamically detect and use the current context from the browser
+        # Dynamically detect and use the current context from the browser
         entreprise, exercice = await get_current_context(page)
         log(f"✅ Detected Browser Context: {entreprise} / {exercice}")
         
