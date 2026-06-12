@@ -97,15 +97,13 @@ class ImportTab(ttk.Frame):
             vars_dict['compte_ht_19'] = tk.StringVar(value=f_data.get('compte_ht_19', ''))
             ttk.Entry(frame, textvariable=vars_dict['compte_ht_19'], width=15).grid(row=0, column=3, padx=5, pady=2)
 
-            # Row 1: TVA 19% and Cash Checkbox
+            # Row 1: TVA 19%
             ttk.Label(frame, text="Compte TVA 19%:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
             vars_dict['compte_tva_19'] = tk.StringVar(value=f_data.get('compte_tva_19', ''))
             ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=1, column=1, padx=5, pady=2)
             
-            vars_dict['use_cash'] = tk.BooleanVar(value=bool(f_data.get('use_cash', False)))
-            ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=1, column=2, columnspan=2, sticky=tk.W, padx=5, pady=2)
-            
             # Hardcoded/unused schema values
+            vars_dict['use_cash'] = tk.BooleanVar(value=False)
             vars_dict['use_timbre'] = tk.BooleanVar(value=True)
             vars_dict['compte_timbre'] = tk.StringVar(value="437000")
             vars_dict['use_7_percent'] = tk.BooleanVar(value=False)
