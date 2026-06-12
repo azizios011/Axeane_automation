@@ -7,9 +7,12 @@ async def wait(page: Page, ms: int = None) -> None:
     delay = ms if ms is not None else SETTINGS.get("slow_mo", 300)
     await page.wait_for_timeout(delay)
 
-async def wait_for_spinner(page: Page, timeout: int = 30000) -> None:
+async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
     """Wait for spinner/loading modals to disappear."""
     try:
+        # First, wait a small amount to let any spinners appear
+        await wait(page, 500)
+        
         await page.wait_for_function(
             """() => {
                 const spinners = document.querySelectorAll('.nx-modern-spinner-modal, .modal.in, [uib-modal-window], .loading-spinner');
@@ -20,6 +23,9 @@ async def wait_for_spinner(page: Page, timeout: int = 30000) -> None:
             }""",
             timeout=timeout,
         )
+        
+        # Wait a little more to be safe
+        await wait(page, 500)
     except PWTimeout:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
@@ -359,16 +365,20 @@ async def check_for_error_popup(page: Page) -> str | None:
 
 async def save_entry(page: Page) -> str | None:
     """Clicks Enregistrer and returns an error message string if Axeane rejected the save, else None."""
+    await wait_for_spinner(page)
     await page.locator("#ec-save").scroll_into_view_if_needed()
     await page.locator("#ec-save").click()
     await wait(page, 1500)
+    await wait_for_spinner(page)
     return await check_for_error_popup(page)
 
 async def reset_form(page: Page) -> None:
+    await wait_for_spinner(page)
     btn = page.locator("button[ng-click*='resetEcritures']")
     if await btn.count() > 0:
         await btn.first.click()
         await wait(page, 500)
+        await wait_for_spinner(page)
 
 # 🆕 UPDATED: Accepts the UI callback
 # ... [Keep all other functions exactly as they were] ...
