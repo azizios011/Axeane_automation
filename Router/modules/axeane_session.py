@@ -183,30 +183,27 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SET JOURNAL (Switching VT/CA)
+    # 1. JOURNAL
     await nya_select_by_js(page, "jo-eav", entry["journal"])
     await wait_for_spinner(page)
 
-    # 2. EXTRACT DATE
+    # 2. DAY (Fixes 'dd' error)
     parts = entry["date"].split("/")
     jour = parts[0]
-    month_idx = int(parts[1])
-    
-    # 3. FILL DAY (Unlock the UI)
     j_input = page.locator("#inputJourIdEcritureAv")
     await j_input.click()
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
-    await j_input.type(jour, delay=100) 
+    await j_input.type(jour, delay=100)
     await j_input.press("Tab")
-    await wait_for_spinner(page) # Wait for UI to validate the day
+    await wait_for_spinner(page)
 
-    # 4. SELECT MOIS
+    # 3. MONTH
     month_list = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-    await nya_select_by_js(page, "inputMoisIdEcriture", month_list[month_idx])
+    await nya_select_by_js(page, "inputMoisIdEcriture", month_list[int(parts[1])])
 
-    # 5. PIECE & LIBELLE
+    # 4. REF & LIBELLE
     await page.locator("#idDocumentInputMD2").fill(entry["piece"])
     await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
     await page.keyboard.press("Tab")
@@ -214,31 +211,24 @@ async def fill_header(page: Page, entry: dict) -> None:
     
 async def fill_line(page: Page, idx: int, line: dict) -> None:
     await wait_for_spinner(page)
-    
-    # Check how many rows currently exist
     rows = page.locator("tbody tr.td-row")
-    current_count = await rows.count()
     
-    # If the row we need (idx) doesn't exist, click the PLUS button
-    if idx >= current_count:
-        # The PLUS icon in the vertical toolbar
-        add_btn = page.locator(".td-cmd .fa-plus").first
-        await add_btn.click()
-        # Wait for the specific row index to appear
-        await rows.nth(idx).wait_for(state="visible", timeout=3000)
-    
+    if idx >= await rows.count():
+        # Ensure header is valid before adding row
+        await page.locator(".td-cmd .fa-plus").first.click()
+        await rows.nth(idx).wait_for(state="visible", timeout=5000)
+
     row = rows.nth(idx)
-    
-    # FILL ACCOUNT
     compte_input = row.locator("td.tc-cp input.form-control")
+    
     await compte_input.click()
     await compte_input.fill(line["account"])
-    await wait(page, 400)
+    # Wait for the typeahead list to appear
+    await page.wait_for_selector(".dropdown-menu.uib-typeahead-popup", state="visible", timeout=3000)
     await page.keyboard.press("ArrowDown")
     await page.keyboard.press("Enter")
     await wait_for_spinner(page)
 
-    # FILL LIBELLE, DEBIT, CREDIT
     await row.locator(f"#exlibelle{idx}").fill(line["label"])
     
     debit = float(line["debit"])
@@ -356,29 +346,48 @@ async def save_entry(page: Page) -> str | None:
     await wait_for_spinner(page)
     return await check_for_error_popup(page)
 
+async def close_blocking_modals(page: Page):
+    """Detects and closes Axeane error/info popups that block the UI."""
+    # Matches the 'X' button or 'OK/Fermer/OUI' buttons in Axeane modals
+    modals = page.locator(".modal.in, .swal2-container")
+    if await modals.count() > 0:
+        log("  ⚠️ Closing blocking modal...")
+        # Try clicking the close 'X' or confirmation buttons
+        close_btn = page.locator(".modal.in button.close, .modal.in button:has-text('Fermer'), .swal2-confirm, .swal2-close")
+        if await close_btn.count() > 0:
+            await close_btn.first.click()
+            await page.wait_for_timeout(500)
+
 async def reset_form(page: Page) -> None:
-    """Wipes the table clean using the toolbar delete button and handles spinners."""
+    """Wipes the table safely without triggering 'Empty Table' errors."""
     log("  🧹 Resetting form for next entry...")
     await wait_for_spinner(page)
     
-    # 1. Click the 'Delete All' (Trash) icon in the vertical toolbar (left side of table)
-    trash_btn = page.locator(".td-cmd .fa-trash")
-    if await trash_btn.count() > 0:
-        await trash_btn.first.click()
-        await wait(page, 400)
-        # Handle the confirmation popup if Axeane shows one
-        confirm = page.locator("button:has-text('OUI'), button:has-text('Yes'), .swal2-confirm")
-        if await confirm.count() > 0:
-            await confirm.click()
+    # 1. Clear any stuck modals from the previous run
+    await close_blocking_modals(page)
 
-    # 2. Use the standard reset button as a secondary measure
-    header_reset = page.locator("button[ng-click*='resetEcritures']")
-    if await header_reset.count() > 0:
-        await header_reset.first.click()
+    # 2. Check if table has rows before clicking Trash
+    row_count = await page.locator("tbody tr.td-row").count()
+    if row_count > 0:
+        trash_btn = page.locator(".td-cmd .fa-trash")
+        if await trash_btn.count() > 0:
+            await trash_btn.first.click()
+            await page.wait_for_timeout(500)
+            # Confirm 'OUI' if it asks
+            confirm = page.locator("button:has-text('OUI'), .swal2-confirm")
+            if await confirm.count() > 0:
+                await confirm.click()
+                await wait_for_spinner(page)
     
-    await page.keyboard.press("Escape") # Close any stuck tooltips
+    # 3. Standard Header Reset button
+    header_reset = page.locator("button[ng-click*='resetEcritures']").first
+    if await header_reset.is_visible():
+        # Use force click because Axeane sometimes hides this under tooltips
+        await header_reset.click(force=True)
+    
+    await page.keyboard.press("Escape")
     await wait_for_spinner(page)
-    log("  ✅ Form cleared.")
+    log("  ✅ Form ready.")
 
 # 🆕 UPDATED: Accepts the UI callback
 # ... [Keep all other functions exactly as they were] ...
@@ -464,4 +473,3 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
                 await reset_form(page)
 
         log("Done — all entries processed.")
-        
