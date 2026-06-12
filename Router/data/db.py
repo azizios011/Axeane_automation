@@ -140,25 +140,23 @@ def set_default(formula_id: int) -> None:
 
 
 def match_formula(client_name: str) -> dict:
-    """Finds formula by matching the name part of 'ID | NAME'."""
+    """Matches 'ID | NAME' against 'client_match' in formulas table."""
     client_name = (client_name or "").upper().strip()
     
-    # If the CSV has "C000045 | 2 CLIENT COMPTANT--SA", 
-    # we want to match against "2 CLIENT COMPTANT--SA"
+    # 1. Clean name (Extract 'TUNISIE AUTOMOTIVE' from 'C000114 | TUNISIE AUTOMOTIVE')
     name_only = client_name.split("|")[-1].strip()
     
     formulas = list_formulas()
     
-    # 1. Try to match the Name specifically
+    # 2. Try Exact Match on Name
     for f in formulas:
         cm = (f.get("client_match") or "").strip().upper()
-        if cm and cm == name_only:
-            return f
-
-    # 2. Try to see if the formula name is anywhere in the full string
+        if cm and cm == name_only: return f
+        
+    # 3. Try Partial Match
     for f in formulas:
         cm = (f.get("client_match") or "").strip().upper()
-        if cm and cm in client_name:
-            return f
+        if cm and cm in client_name: return f
             
     return get_default_formula()
+    
