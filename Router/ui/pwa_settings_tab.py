@@ -140,21 +140,19 @@ class PwaSettingsTab(ttk.Frame):
         user_data_dir = os.path.join(os.getcwd(), "cdp_user_data")
         os.makedirs(user_data_dir, exist_ok=True)
 
-    # 🆕 NEW: Added flags to stop Tracking Prevention and Notifications
         cmd = [
-        exe,
-        f"--remote-debugging-port={port}",
-        f"--user-data-dir={user_data_dir}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-notifications",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-features=TrackingPrevention",
-        "--enable-logging",      # 🆕 Enables internal browser logging
-        "--v=1",                 # 🆕 Verbosity level 1 (shows errors)
-        url
-    ]
-    
+            exe,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-notifications",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=TrackingPrevention,EdgeSidebar,msEdgeSettingsImport", # 🆕 Stop Sidebar and Imports
+            "--force-device-scale-factor=1", # 🆕 Keeps UI scale consistent
+            "--start-maximized",
+            url
+        ]
         try:
             subprocess.Popen(cmd)
             self.status_var.set("🟡 Browser Launched (Waiting for connection...)")

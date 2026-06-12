@@ -388,37 +388,40 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
     cdp_url = SETTINGS.get("cdp_url", "http://localhost:9222")
     async with async_playwright() as pw:
         log(f"Connecting to CDP at {cdp_url}...")
+        
+        # Connect to the browser via CDP
         browser = await pw.chromium.connect_over_cdp(cdp_url)
         
-        page = next((p for p in all_pages if "axeane" in p.url.lower()), all_pages[0])
-
-       # 🆕 DEBUGGING MODE: Listen for browser errors
-        if browser_log_callback:
-            # Captures console.error() from the browser
-            page.on("console", lambda msg: browser_log_callback(f"🌐 BROWSER: {msg.text}") if msg.type == "error" else None)
-            # Captures actual script crashes
-            page.on("pageerror", lambda exc: browser_log_callback(f"💥 PAGE CRASH: {exc}"))
-
-        await page.bring_to_front()
-        # ... rest of the code ...
-
+        # 1. Define all_pages FIRST (Collects all open tabs)
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
+        
+        # 2. Find the Axeane tab
         page: Page = next(
             (p for p in all_pages if "axeane" in p.url.lower() or "kompta" in p.url.lower()),
             all_pages[0] if all_pages else None,
         )
         
-        if page is None: raise RuntimeError("No page found. Is Axeane Kompta open?")
+        if page is None: 
+            raise RuntimeError("No page found. Is Axeane Kompta open?")
+
+        # 3. DEBUGGING MODE: Pipe browser errors to your app console
+        if browser_log_callback:
+            # Captures console.error() from the browser
+            page.on("console", lambda msg: browser_log_callback(f"🌐 BROWSER: {msg.text}") if msg.type == "error" else None)
+            # Captures actual script crashes (like Angular failures)
+            page.on("pageerror", lambda exc: browser_log_callback(f"💥 PAGE CRASH: {exc}"))
+
         log(f"Connected to: {page.url}")
         await page.bring_to_front()
 
+        # Initial Setup Navigation
         await do_login(page)
         await select_context(page)
         await navigate_to_saisie(page)
 
         total = len(entries)
         for i, entry in enumerate(entries):
-            # 🆕 Check if the user clicked the Stop button
+            # Check if the user clicked the Stop button
             if stop_event and stop_event.is_set():
                 log("🛑 Automation stopped by user.")
                 break
@@ -431,16 +434,21 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
             log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
             
             await wait_for_spinner(page)
-            await reset_form(page)  # Ensure fresh start for each entry
+            await reset_form(page)  # Clear table and fix "dd" error
             await wait_for_spinner(page)
+            
+            # Fill Header (Journal, Day, Month, Ref, Libelle)
             await fill_header(page, entry)
+            
+            # Fill Lines (Accounts and Amounts)
             for j, line in enumerate(entry["lines"]):
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
                 await fill_line(page, j, line)
 
-            # Safety net: remove any leftover default rows beyond what we filled
+            # Safety net: remove any leftover rows
             await cleanup_extra_rows(page, len(entry["lines"]))
 
+            # Verify balance in Axeane UI
             is_verified = await verify_entry(page, entry, update_ui_callback)
             
             if is_verified:
@@ -449,10 +457,11 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
                     log(f"  ❌ Axeane rejected save for {entry['docRef']}: {save_error}")
                     if update_ui_callback: update_ui_callback(entry['docRef'], 'error')
                 else:
+                    # Successfully saved, clear for next invoice
                     await reset_form(page)
             else:
                 log(f"  ❌ SKIPPING SAVE: Entry {entry['docRef']} is not balanced in Axeane UI!")
                 await reset_form(page)
 
         log("Done — all entries processed.")
-    
+        
