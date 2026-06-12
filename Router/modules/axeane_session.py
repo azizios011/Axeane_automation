@@ -30,7 +30,7 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """Click a nya-bs-select option by its visible text via JS."""
+    """Click a nya-bs-select option and force an 'input' event to trigger Angular sync."""
     found = await page.evaluate(
         """([olId, text]) => {
             const ol = document.getElementById(olId);
@@ -38,9 +38,11 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
             const spans = ol.querySelectorAll('li.nya-bs-option a span.ng-binding');
             for (const sp of spans) {
                 if (sp.textContent.trim() === text) {
-                    sp.closest('li').click();
-                    const scope = angular.element(ol).scope();
-                    if (scope) scope.$apply();
+                    const link = sp.closest('a');
+                    link.click();
+                    // Force Angular to recognize the change
+                    const event = new Event('input', { bubbles: true });
+                    ol.dispatchEvent(event);
                     return true;
                 }
             }
@@ -49,8 +51,9 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
         [ol_id, option_text],
     )
     if not found:
-        log(f"  WARNING: option '{option_text}' not found in #{ol_id}")
-    await wait(page)
+        log(f"  ⚠️ WARNING: option '{option_text}' not found in #{ol_id}")
+    # CRITICAL: Always wait after a journal switch for the UI to rebuild
+    await wait(page, 1000)
 
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the UI."""
@@ -168,38 +171,38 @@ async def navigate_to_saisie(page: Page) -> None:
 
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
+    
+    # 1. SET JOURNAL FIRST (This is the most 'destructive' change to the UI)
+    journal_code = entry["journal"] 
+    log(f"  Selecting Journal: {journal_code}")
+    await nya_select_by_js(page, "jo-eav", journal_code)
+    await wait_for_spinner(page) # Wait for sequence/period to load
+
+    # 2. SET DATE
     date = entry["date"]
-    month = int(date.split("/")[1])
+    month_idx = int(date.split("/")[1])
     jour = date.split("/")[0]
     
+    # Fill actual Date input (triggers period validation)
     d = page.locator("#ec-date-creation")
-    await d.scroll_into_view_if_needed()
-    await d.click(); await d.fill(date); await d.press("Tab")
-    await wait(page)
+    await d.fill(date)
+    await d.press("Tab")
     await wait_for_spinner(page)
-    
-    journal_code = "CA" if entry.get("is_cash") else entry["journal"]
-    await nya_select_by_js(page, "jo-eav", journal_code)
-    await wait_for_spinner(page)
-    await nya_select_by_js(page, "inputMoisIdEcriture", ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month])
-    await wait_for_spinner(page)
+
+    # 3. SET MONTH & DAY (Redundant but required for some Axeane versions)
+    month_name = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
+                  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month_idx]
+    await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
     
     j = page.locator("#inputJourIdEcritureAv")
-    await j.scroll_into_view_if_needed()
-    await j.click(); await j.fill(jour); await j.press("Tab")
-    await wait(page)
+    await j.fill(jour)
+    await j.press("Tab")
     await wait_for_spinner(page)
-    
-    p = page.locator("#idDocumentInputMD2")
-    await p.scroll_into_view_if_needed()
-    await p.click(); await p.fill(entry["piece"]); await p.press("Tab")
-    await wait(page)
-    await wait_for_spinner(page)
-    
-    lb = page.locator("#inputLibelleIdMD2")
-    await lb.scroll_into_view_if_needed()
-    await lb.click(); await lb.fill(entry["libelle"]); await lb.press("Tab")
-    await wait(page)
+
+    # 4. PIECE & LIBELLE
+    await page.locator("#idDocumentInputMD2").fill(entry["piece"])
+    await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
+    await page.keyboard.press("Tab")
     await wait_for_spinner(page)
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
@@ -373,12 +376,18 @@ async def save_entry(page: Page) -> str | None:
     return await check_for_error_popup(page)
 
 async def reset_form(page: Page) -> None:
+    """Ensure the form is completely cleared and no modals are blocking the UI."""
     await wait_for_spinner(page)
+    
+    # Click the reset button
     btn = page.locator("button[ng-click*='resetEcritures']")
     if await btn.count() > 0:
         await btn.first.click()
         await wait(page, 500)
-        await wait_for_spinner(page)
+    
+    # SPECIAL FIX: Escape any stuck tooltips or menus
+    await page.keyboard.press("Escape")
+    await wait_for_spinner(page)
 
 # 🆕 UPDATED: Accepts the UI callback
 # ... [Keep all other functions exactly as they were] ...

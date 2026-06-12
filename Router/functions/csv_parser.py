@@ -123,19 +123,23 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
         libelle = client_raw.split("|", 1)[-1].strip().upper() if "|" in client_raw else client_raw.strip().upper()
         piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
 
-        # Determine Journal: CA if cash, else VT for Vente, AC for Achat
-        journal_code = "CA" if is_cash_entry else ("VT" if doc_type == "Vente" else "AC")
+# ... inside the loop in parse_csv_with_mapping ...
+        # Determine Journal: CA if cash logic is active, otherwise the default for the doc_type
+        if is_cash_entry:
+            journal_code = "CA"
+        else:
+            journal_code = "VT" if doc_type == "Vente" else "AC"
 
         entries.append({
             "docRef": ref,
             "date": first.get("date", ""),
-            "journal": journal_code,
+            "journal": journal_code, # This must be explicit
             "libelle": libelle,
             "piece": piece,
             "balanced": balanced,
             "error_reason": error_reason,
             "lines": lines,
-            "is_cash": is_cash_entry  # Flag for UI automation
+            "is_cash": is_cash_entry 
         })
 
     n_unbalanced = sum(1 for e in entries if not e["balanced"])
