@@ -30,23 +30,20 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """Click a nya-bs-select option by text and force Angular sync."""
+    """Finds the option in the dropdown and clicks it."""
     await page.evaluate("""([olId, text]) => {
         const ol = document.getElementById(olId);
         if (!ol) return;
-        const spans = ol.querySelectorAll('li.nya-bs-option a span.ng-binding');
+        // Search specifically for the text in the spans
+        const spans = ol.querySelectorAll('li.nya-bs-option span.ng-binding');
         for (const sp of spans) {
             if (sp.textContent.trim().toLowerCase() === text.toLowerCase()) {
-                sp.closest('a').click();
-                // Trigger change for Angular
-                const event = new Event('change', { bubbles: true });
-                ol.dispatchEvent(event);
+                sp.click();
                 return;
             }
         }
     }""", [ol_id, option_text])
-    await wait(page, 500)
-
+    await wait(page, 400) # Small wait for UI to catch up
 
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the UI."""
@@ -165,53 +162,39 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SELECT JOURNAL (Must be first)
+    # 1. SELECT JOURNAL (Must be first because it resets the sequence)
     journal_code = entry["journal"] 
     log(f"  Selecting Journal: {journal_code}")
     await nya_select_by_js(page, "jo-eav", journal_code)
     await wait_for_spinner(page)
 
-    # 2. DATE AND JOUR (DAY)
+    # 2. EXTRACT JOUR AND MOIS FROM CSV DATE
     date_val = entry["date"]  # e.g., "02/03/2026"
     parts = date_val.split("/")
-    jour = parts[0]
-    month_idx = int(parts[1])
-
-    # Handle Main Date (#ec-date-creation)
-    d_input = page.locator("#ec-date-creation")
-    await d_input.click()
-    await page.keyboard.press("Control+A")
-    await page.keyboard.press("Backspace")
-    await d_input.type(date_val, delay=50)
-    await d_input.press("Tab")
-    await wait_for_spinner(page)
-
-    # Handle Day Field (#inputJourIdEcritureAv) - This was the "dd" error
-    # We use .type() instead of .fill() to respect the mask
+    jour = parts[0]           # "02"
+    month_idx = int(parts[1]) # 3
+    
+    # 3. FILL JOUR (The specific Day field)
+    # We DON'T touch #ec-date-creation anymore.
     j_input = page.locator("#inputJourIdEcritureAv")
     await j_input.click()
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
-    await j_input.type(jour, delay=100) 
+    await j_input.type(jour, delay=50) 
     await j_input.press("Tab")
     await wait_for_spinner(page)
 
-    # 3. SELECT MONTH
+    # 4. SELECT MOIS
     month_name = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month_idx]
-    # In your DOM, the ID is inputMoisIdEcriture
     await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
     await wait_for_spinner(page)
 
-    # 4. REFERENCE AND LIBELLE
-    # Reference ID from DOM: idDocumentInputMD2
-    ref_input = page.locator("#idDocumentInputMD2")
-    await ref_input.fill(entry["piece"])
-    
-    # Libelle ID from DOM: inputLibelleIdMD2
-    lib_input = page.locator("#inputLibelleIdMD2")
-    await lib_input.fill(entry["libelle"])
-    await lib_input.press("Tab")
+    # 5. FILL REFERENCE AND LIBELLE
+    # These IDs are from your DOM snippet
+    await page.locator("#idDocumentInputMD2").fill(entry["piece"])
+    await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
+    await page.keyboard.press("Tab")
     
     await wait_for_spinner(page)
 
