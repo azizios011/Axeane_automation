@@ -408,6 +408,8 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> 
             log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
             
             await wait_for_spinner(page)
+            await reset_form(page)  # Ensure fresh start for each entry
+            await wait_for_spinner(page)
             await fill_header(page, entry)
             for j, line in enumerate(entry["lines"]):
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
