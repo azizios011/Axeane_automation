@@ -4,6 +4,7 @@ from ui.main_window import MainWindow
 from functions.csv_parser import parse_csv_with_mapping
 from functions.helpers import log
 from modules.axeane_session import run
+from data.migrate_formulas import migrate
 
 stop_event = threading.Event()
 
@@ -37,6 +38,11 @@ def stop_automation():
     stop_event.set()
 
 def main() -> None:
+    log("Checking/running formulas database migration...")
+    try:
+        migrate()
+    except Exception as e:
+        log(f"⚠️ Migration failed/skipped: {e}")
     log("Starting Axeane Kompta Automation UI...")
     app = MainWindow(on_process_callback=on_process_data, on_stop_callback=stop_automation)
     app.run()
