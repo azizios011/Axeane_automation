@@ -140,11 +140,20 @@ class PwaSettingsTab(ttk.Frame):
         user_data_dir = os.path.join(os.getcwd(), "cdp_user_data")
         os.makedirs(user_data_dir, exist_ok=True)
 
-        cmd = [exe, f"--remote-debugging-port={port}", f"--user-data-dir={user_data_dir}", "--no-first-run", "--no-default-browser-check", url]
-        
-        self._log(f"🚀 Launching: {exe}")
-        self._log(f"   Port: {port} | URL: {url}")
-        
+    # 🆕 NEW: Added flags to stop Tracking Prevention and Notifications
+        cmd = [
+            exe,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-notifications",             # Stops the Notification error
+            "--disable-blink-features=AutomationControlled", # Makes Axeane think you are a human
+            "--disable-features=TrackingPrevention", # Disables Edge Tracking Prevention
+            "--ignore-certificate-errors",
+            url
+        ]
+    
         try:
             subprocess.Popen(cmd)
             self.status_var.set("🟡 Browser Launched (Waiting for connection...)")

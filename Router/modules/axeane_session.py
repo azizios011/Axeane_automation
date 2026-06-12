@@ -383,12 +383,25 @@ async def reset_form(page: Page) -> None:
 # 🆕 UPDATED: Accepts the UI callback
 # ... [Keep all other functions exactly as they were] ...
 
-async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> None:
+# Add a new parameter: browser_log_callback
+async def run(entries: list[dict], update_ui_callback=None, stop_event=None, browser_log_callback=None) -> None:
     cdp_url = SETTINGS.get("cdp_url", "http://localhost:9222")
     async with async_playwright() as pw:
         log(f"Connecting to CDP at {cdp_url}...")
-        browser: Browser = await pw.chromium.connect_over_cdp(cdp_url)
+        browser = await pw.chromium.connect_over_cdp(cdp_url)
         
+        page = next((p for p in all_pages if "axeane" in p.url.lower()), all_pages[0])
+
+       # 🆕 DEBUGGING MODE: Listen for browser errors
+        if browser_log_callback:
+            # Captures console.error() from the browser
+            page.on("console", lambda msg: browser_log_callback(f"🌐 BROWSER: {msg.text}") if msg.type == "error" else None)
+            # Captures actual script crashes
+            page.on("pageerror", lambda exc: browser_log_callback(f"💥 PAGE CRASH: {exc}"))
+
+        await page.bring_to_front()
+        # ... rest of the code ...
+
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
         page: Page = next(
             (p for p in all_pages if "axeane" in p.url.lower() or "kompta" in p.url.lower()),
