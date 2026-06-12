@@ -213,22 +213,38 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     await wait_for_spinner(page)
     rows = page.locator("tbody tr.td-row")
     
+    # 1. ADD ROW IF NEEDED
     if idx >= await rows.count():
-        # Ensure header is valid before adding row
+        log(f"    ➕ Adding row {idx}...")
+        # Header must be valid (Jour filled) for this to work
         await page.locator(".td-cmd .fa-plus").first.click()
         await rows.nth(idx).wait_for(state="visible", timeout=5000)
 
     row = rows.nth(idx)
     compte_input = row.locator("td.tc-cp input.form-control")
     
+    # 2. INTERACT WITH COMPTE (TYPEAHEAD)
     await compte_input.click()
-    await compte_input.fill(line["account"])
-    # Wait for the typeahead list to appear
-    await page.wait_for_selector(".dropdown-menu.uib-typeahead-popup", state="visible", timeout=3000)
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    
+    # Type the account slowly like a human (this triggers the search)
+    await page.keyboard.type(line["account"], delay=100)
+    
+    # Wait a moment for Axeane's server to return results
+    await wait(page, 800) 
+    
+    # Check if a suggestion appeared and select it
+    # We press ArrowDown and Enter regardless of the popup class visibility
     await page.keyboard.press("ArrowDown")
+    await wait(page, 200)
     await page.keyboard.press("Enter")
+    
+    # Wait for Axeane to process the selection (updates label and tax)
     await wait_for_spinner(page)
 
+    # 3. FILL LIBELLE, DEBIT, CREDIT
+    # Using specific IDs from your DOM
     await row.locator(f"#exlibelle{idx}").fill(line["label"])
     
     debit = float(line["debit"])
@@ -442,8 +458,10 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
 
             log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
             
-            await wait_for_spinner(page)
-            await reset_form(page)  # Clear table and fix "dd" error
+            jour_input = page.locator("#inputJourIdEcritureAv")
+            if await jour_input.is_visible():
+                await jour_input.click()
+    
             await wait_for_spinner(page)
             
             # Fill Header (Journal, Day, Month, Ref, Libelle)
