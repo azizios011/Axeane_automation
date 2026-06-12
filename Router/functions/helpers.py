@@ -23,7 +23,8 @@ def tva_rate(rate_str: str) -> Decimal:
     return Decimal(m.group()) if m else Decimal("19")
 
 def is_cash(client: str) -> bool:
-    return bool(re.compile(r"passager|comptant|caisse|fj pass", re.I).search(client))
+    # Removed 'comptant' from the list
+    return bool(re.compile(r"passager|caisse|fj pass", re.I).search(client))
 
 def is_avoir(op: str) -> bool:
     return "avoir" in op.lower()

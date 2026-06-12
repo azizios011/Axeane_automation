@@ -29,11 +29,12 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
     for ref, rows in groups.items():
         first = rows[0]
         avoir = is_avoir(first.get("operation", ""))
-        cash_client = is_cash_client(first.get("client", ""))
+        client_raw_name = first.get("client", "")
         ttc = abs(first.get("ttc", ZERO))
 
-        formula = get_formula(first.get("client", ""))
-        is_cash_entry = formula.get("use_cash", False) or cash_client
+        formula = get_formula(client_raw_name)
+        is_cash_entry = bool(formula.get("use_cash", False))
+
 
         # ── 7%_Rate_Formula: group rows sharing the same ref by TVA rate ──
         # If a ref appears twice with different TVA% (e.g. 19% and 7%),
