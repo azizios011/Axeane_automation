@@ -30,20 +30,26 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """Finds the option in the dropdown and clicks it."""
+    """Robust selection for Axeane's nya-bs-select that forces Angular sync."""
     await page.evaluate("""([olId, text]) => {
         const ol = document.getElementById(olId);
         if (!ol) return;
-        // Search specifically for the text in the spans
-        const spans = ol.querySelectorAll('li.nya-bs-option span.ng-binding');
-        for (const sp of spans) {
-            if (sp.textContent.trim().toLowerCase() === text.toLowerCase()) {
-                sp.click();
+        const items = ol.querySelectorAll('li.nya-bs-option');
+        for (const li of items) {
+            const span = li.querySelector('span.ng-binding');
+            if (span && span.textContent.trim().toLowerCase() === text.toLowerCase()) {
+                li.querySelector('a').click();
+                // FORCE Angular Update
+                const scope = angular.element(ol).scope();
+                if (scope) {
+                    scope.$apply();
+                }
                 return;
             }
         }
     }""", [ol_id, option_text])
-    await wait(page, 400) # Small wait for UI to catch up
+    # Give the UI a moment to rebuild the table headers/rows
+    await page.wait_for_timeout(800)
 
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the UI."""
@@ -162,25 +168,24 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SELECT JOURNAL (Must be first because it resets the sequence)
+    # 1. SELECT JOURNAL (Switch between VT and CA)
     journal_code = entry["journal"] 
     log(f"  Selecting Journal: {journal_code}")
     await nya_select_by_js(page, "jo-eav", journal_code)
     await wait_for_spinner(page)
 
-    # 2. EXTRACT JOUR AND MOIS FROM CSV DATE
-    date_val = entry["date"]  # e.g., "02/03/2026"
-    parts = date_val.split("/")
-    jour = parts[0]           # "02"
-    month_idx = int(parts[1]) # 3
+    # 2. EXTRACT DATE DATA
+    date_parts = entry["date"].split("/")
+    jour = date_parts[0]           # "02"
+    month_idx = int(date_parts[1]) # 3
     
-    # 3. FILL JOUR (The specific Day field)
-    # We DON'T touch #ec-date-creation anymore.
+    # 3. FIX THE "JOUR" FIELD (Prevent the "dd" error)
+    # We click, clear with keyboard, and type slowly
     j_input = page.locator("#inputJourIdEcritureAv")
     await j_input.click()
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
-    await j_input.type(jour, delay=50) 
+    await j_input.type(jour, delay=100) 
     await j_input.press("Tab")
     await wait_for_spinner(page)
 
@@ -190,8 +195,7 @@ async def fill_header(page: Page, entry: dict) -> None:
     await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
     await wait_for_spinner(page)
 
-    # 5. FILL REFERENCE AND LIBELLE
-    # These IDs are from your DOM snippet
+    # 5. PIECE & LIBELLE
     await page.locator("#idDocumentInputMD2").fill(entry["piece"])
     await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
     await page.keyboard.press("Tab")
@@ -200,22 +204,22 @@ async def fill_header(page: Page, entry: dict) -> None:
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
     await wait_for_spinner(page)
-    # ── Row management ────────────────────────────────────────────────────
-    # The form opens with a couple of default empty rows already present.
-    # Only click "ajouterEcriture()" if row `idx` doesn't exist yet —
-    # blindly adding a row for every idx>0 creates extra unfilled rows
-    # that Axeane's own save validation rejects
-    # ("L'écriture N° X doit avoir un crédit ou un débit").
     current_count = await page.locator("tbody tr.td-row").count()
+    
     if idx >= current_count:
-        # From your DOM: the add button is the .td-cb with fa-plus
-        await page.locator(".td-cb .fa-plus").first.click()
-        # Wait for the specific row to exist
-        await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=5000)
+        # Click the "+" button
+        await page.locator("button[ng-click='ajouterEcriture()']").first.click()
+        # Wait for the row to actually appear in the DOM
+        try:
+            await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=3000)
+        except:
+            # Fallback if first click failed
+            await page.locator("button[ng-click='ajouterEcriture()']").first.click()
+            await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=3000)
         await wait_for_spinner(page)
 
-    # Get the specific row (needed for the Compte field which has a dynamic ID)
     row = page.locator("tbody tr.td-row").nth(idx)
+    # ... rest of your line filling code ...
     
     # Fill Compte (Account) using Typeahead keyboard simulation
     # The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
