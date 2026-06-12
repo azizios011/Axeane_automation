@@ -1,19 +1,8 @@
 from decimal import Decimal, ROUND_HALF_UP
 from functions.helpers import log, dec, tva_rate, is_cash as is_cash_client, is_avoir, ZERO, MILLIME
-from data.config import SKIP_RE
-from data.formulas import FORMULAS
+from data.config import SKIP_RE, ACC_ROUND, LBL_ROUND
+from data.db import match_formula as get_formula
 
-def get_formula(client_name: str) -> dict:
-    client_name = client_name.upper()
-    for f in FORMULAS:
-        if f["client_match"].upper() in client_name or client_name in f["client_match"].upper():
-            return f
-    # Default fallback if no match
-    return FORMULAS[0] if FORMULAS else {
-        "compte_client": "411000", "compte_tva_19": "436710", "compte_ht_19": "707019",
-        "use_timbre": True, "compte_timbre": "736000", "use_7_percent": False,
-        "compte_tva_7": "436707", "compte_ht_7": "707007", "use_cash": False, "compte_caisse": "541100"
-    }
 
 def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -> list[dict]:
     normalized_rows = []
@@ -42,10 +31,13 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
         avoir = is_avoir(first.get("operation", ""))
         cash_client = is_cash_client(first.get("client", ""))
         ttc = abs(first.get("ttc", ZERO))
-        
+
         formula = get_formula(first.get("client", ""))
         is_cash_entry = formula.get("use_cash", False) or cash_client
-        
+
+        # ── 7%_Rate_Formula: group rows sharing the same ref by TVA rate ──
+        # If a ref appears twice with different TVA% (e.g. 19% and 7%),
+        # both rates' HT/TVA amounts end up here and get their own lines.
         ht_by_rate: dict[Decimal, Decimal] = {}
         tva_by_rate: dict[Decimal, Decimal] = {}
         for r in rows:
@@ -54,47 +46,46 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
             tva_by_rate[rate] = tva_by_rate.get(rate, ZERO) + abs(r.get("tva_amt", ZERO))
 
         lines = []
-        
+
         if not avoir:
-            # ── FACTURE ──────────────────────────────────────────────
-            if is_cash_entry:
-                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ttc, "credit": ZERO})
-                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
-            else:
-                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
-                
+            # ── Facture_Formula (also the Default_Formula template) ──────
+            lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
+
             if formula.get("use_timbre"):
                 lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": ZERO, "credit": Decimal("1.000")})
-                
+
             for rate, ht in ht_by_rate.items():
                 if rate == Decimal("7") and formula.get("use_7_percent"):
                     lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ZERO, "credit": ht})
                 else:
                     lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ZERO, "credit": ht})
-                    
+
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
                     if rate == Decimal("7") and formula.get("use_7_percent"):
                         lines.append({"account": formula["compte_tva_7"], "label": "TVA 7%", "debit": ZERO, "credit": tva})
                     else:
                         lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": ZERO, "credit": tva})
-        else:
-            # ── AVOIR (Exact Opposite) ───────────────────────────────
+
+            # ── Cash_Fomula: append CAISSE + a duplicate CLIENTS/TTC row ──
+            # The base CLIENTS row above is untouched; these two extra rows
+            # balance each other (CAISSE debit TTC / CLIENTS credit TTC).
             if is_cash_entry:
-                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ZERO, "credit": ttc})
-                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
-            else:
                 lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
-                
+                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ttc, "credit": ZERO})
+        else:
+            # ── Avoir_Formula (exact opposite of Facture) ─────────────────
+            lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
+
             if formula.get("use_timbre"):
                 lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": Decimal("1.000"), "credit": ZERO})
-                
+
             for rate, ht in ht_by_rate.items():
                 if rate == Decimal("7") and formula.get("use_7_percent"):
                     lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ht, "credit": ZERO})
                 else:
                     lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ht, "credit": ZERO})
-                    
+
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
                     if rate == Decimal("7") and formula.get("use_7_percent"):
@@ -102,23 +93,38 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
                     else:
                         lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": tva, "credit": ZERO})
 
-        # ── Balance check + Rounding patch (Ensures Solde = 0) ───────
+            # ── Cash_Fomula: append CAISSE + a duplicate CLIENTS/TTC row ──
+            if is_cash_entry:
+                lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
+                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ZERO, "credit": ttc})
+
+        # ── 0.001_Formula: Solde KPI check ───────────────────────────────
+        # 0.000 -> entry is correct, no change.
+        # 0.001 (either direction) -> Axeane's rounding quirk, patch with
+        #     the dedicated 736 (AJUST ARRONDI) compte.
+        # anything else -> the entry was entered wrong upstream; flag it
+        #     as unbalanced/error instead of silently "fixing" it.
         total_d = sum(l["debit"] for l in lines)
         total_c = sum(l["credit"] for l in lines)
         diff = (total_d - total_c).quantize(MILLIME, rounding=ROUND_HALF_UP)
-        balanced = diff == ZERO
 
-        if not balanced and abs(diff) <= Decimal("5.000"):
-            if diff > ZERO:
-                lines.append({"account": "736000", "label": "AJUST ARRONDI", "debit": ZERO, "credit": abs(diff)})
-            else:
-                lines.append({"account": "736000", "label": "AJUST ARRONDI", "debit": abs(diff), "credit": ZERO})
+        error_reason = None
+        if diff == ZERO:
             balanced = True
+        elif abs(diff) == MILLIME:
+            if diff > ZERO:
+                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": ZERO, "credit": abs(diff)})
+            else:
+                lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": abs(diff), "credit": ZERO})
+            balanced = True
+        else:
+            balanced = False
+            error_reason = f"Solde anormal: {diff} (attendu 0.000 ou 0.001)"
 
         client_raw = first.get("client", "")
         libelle = client_raw.split("|", 1)[-1].strip().upper() if "|" in client_raw else client_raw.strip().upper()
         piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
-        
+
         # Determine Journal: CA if cash, else VT for Vente, AC for Achat
         journal_code = "CA" if is_cash_entry else ("VT" if doc_type == "Vente" else "AC")
 
@@ -129,10 +135,15 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
             "libelle": libelle,
             "piece": piece,
             "balanced": balanced,
+            "error_reason": error_reason,
             "lines": lines,
-            "is_cash": is_cash_entry # Flag for UI automation
+            "is_cash": is_cash_entry  # Flag for UI automation
         })
 
-    log(f"Parsed {len(entries)} entries from CSV ({sum(1 for e in entries if not e['balanced'])} unbalanced)")
+    n_unbalanced = sum(1 for e in entries if not e["balanced"])
+    log(f"Parsed {len(entries)} entries from CSV ({n_unbalanced} unbalanced)")
+    for e in entries:
+        if not e["balanced"]:
+            log(f"  ⚠️ {e['docRef']}: {e['error_reason']}")
     return entries
     

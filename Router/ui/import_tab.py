@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Callable
-from data.formulas import FORMULAS, save_formulas
+import data.db as db
 
 class ImportTab(ttk.Frame):
     def __init__(self, parent, on_data_loaded: Callable[[str, str, list[dict]], None]):
@@ -10,8 +10,10 @@ class ImportTab(ttk.Frame):
         self.doc_type = tk.StringVar(value="Vente")
         self.file_path = tk.StringVar(value="")
         self.csv_data: list[dict] = []
-        self.formulas = FORMULAS.copy()
+        self.formulas = db.list_formulas()
         self.formula_vars = []
+        self.default_var = tk.IntVar(value=0)
+        self.deleted_ids = []
 
         self._build_ui()
 
@@ -59,6 +61,14 @@ class ImportTab(ttk.Frame):
             
         self.formula_vars = []
         
+        # Determine current default index
+        default_idx = 0
+        for idx, f in enumerate(self.formulas):
+            if f.get('is_default'):
+                default_idx = idx
+                break
+        self.default_var.set(default_idx)
+        
         canvas = tk.Canvas(self.formula_list_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.formula_list_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -75,17 +85,28 @@ class ImportTab(ttk.Frame):
         ttk.Frame(scrollable_frame, height=20).pack(fill=tk.X)
 
     def _build_formula_ui(self, parent, idx, f_data):
-        frame = ttk.LabelFrame(parent, text=f"Formula {idx+1}")
+        name_text = f_data.get('name', '')
+        title_text = f"Formula {idx+1}"
+        if name_text:
+            title_text += f": {name_text}"
+        frame = ttk.LabelFrame(parent, text=title_text)
         frame.pack(fill=tk.X, padx=5, pady=5)
         
         vars_dict = {}
+        vars_dict['id'] = f_data.get('id')
         
-        # Row 0: Client Match & Delete
-        ttk.Label(frame, text="Client Match:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        # Row 0: Name & Client Match & Default & Delete
+        ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        vars_dict['name'] = tk.StringVar(value=f_data.get('name', ''))
+        ttk.Entry(frame, textvariable=vars_dict['name'], width=20).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame, text="Client Match:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
         vars_dict['client_match'] = tk.StringVar(value=f_data.get('client_match', ''))
-        ttk.Entry(frame, textvariable=vars_dict['client_match'], width=25).grid(row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+        ttk.Entry(frame, textvariable=vars_dict['client_match'], width=20).grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
         
-        ttk.Button(frame, text="🗑️ Delete", command=lambda: self._delete_formula(idx)).grid(row=0, column=3, padx=5, pady=2)
+        ttk.Radiobutton(frame, text="Default", variable=self.default_var, value=idx).grid(row=0, column=4, padx=5, pady=2)
+        
+        ttk.Button(frame, text="🗑️ Delete", command=lambda: self._delete_formula(idx)).grid(row=0, column=5, padx=5, pady=2)
 
         # Row 1: Base Accounts
         ttk.Label(frame, text="Compte Client:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
@@ -102,7 +123,7 @@ class ImportTab(ttk.Frame):
         ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=2, column=1, padx=5, pady=2)
         
         # Row 3: Timbre
-        vars_dict['use_timbre'] = tk.BooleanVar(value=f_data.get('use_timbre', False))
+        vars_dict['use_timbre'] = tk.BooleanVar(value=bool(f_data.get('use_timbre', False)))
         ttk.Checkbutton(frame, text="Include Timbre (1.000)", variable=vars_dict['use_timbre']).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
         
         ttk.Label(frame, text="Compte Timbre:").grid(row=3, column=2, sticky=tk.W, padx=5, pady=2)
@@ -110,7 +131,7 @@ class ImportTab(ttk.Frame):
         ttk.Entry(frame, textvariable=vars_dict['compte_timbre'], width=15).grid(row=3, column=3, padx=5, pady=2)
 
         # Row 4: 7% Rate
-        vars_dict['use_7_percent'] = tk.BooleanVar(value=f_data.get('use_7_percent', False))
+        vars_dict['use_7_percent'] = tk.BooleanVar(value=bool(f_data.get('use_7_percent', False)))
         ttk.Checkbutton(frame, text="Include 7% Rate", variable=vars_dict['use_7_percent']).grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
 
         ttk.Label(frame, text="Compte HT 7%:").grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
@@ -123,7 +144,7 @@ class ImportTab(ttk.Frame):
         ttk.Entry(frame, textvariable=vars_dict['compte_tva_7'], width=15).grid(row=5, column=3, padx=5, pady=2)
 
         # Row 6: Cash
-        vars_dict['use_cash'] = tk.BooleanVar(value=f_data.get('use_cash', False))
+        vars_dict['use_cash'] = tk.BooleanVar(value=bool(f_data.get('use_cash', False)))
         ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=6, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
 
         ttk.Label(frame, text="Compte Caisse:").grid(row=6, column=2, sticky=tk.W, padx=5, pady=2)
@@ -134,18 +155,22 @@ class ImportTab(ttk.Frame):
 
     def _sync_formulas_from_ui(self):
         updated = []
-        for v in self.formula_vars:
+        default_index = self.default_var.get()
+        for idx, v in enumerate(self.formula_vars):
             updated.append({
+                "id": v['id'],
+                "name": v['name'].get().strip(),
                 "client_match": v['client_match'].get().strip(),
+                "is_default": 1 if idx == default_index else 0,
                 "compte_client": v['compte_client'].get().strip(),
                 "compte_tva_19": v['compte_tva_19'].get().strip(),
                 "compte_ht_19": v['compte_ht_19'].get().strip(),
-                "use_timbre": v['use_timbre'].get(),
+                "use_timbre": 1 if v['use_timbre'].get() else 0,
                 "compte_timbre": v['compte_timbre'].get().strip(),
-                "use_7_percent": v['use_7_percent'].get(),
+                "use_7_percent": 1 if v['use_7_percent'].get() else 0,
                 "compte_tva_7": v['compte_tva_7'].get().strip(),
                 "compte_ht_7": v['compte_ht_7'].get().strip(),
-                "use_cash": v['use_cash'].get(),
+                "use_cash": 1 if v['use_cash'].get() else 0,
                 "compte_caisse": v['compte_caisse'].get().strip()
             })
         self.formulas = updated
@@ -153,22 +178,46 @@ class ImportTab(ttk.Frame):
     def _add_formula(self):
         self._sync_formulas_from_ui()
         self.formulas.append({
-            "client_match": "", "compte_client": "", "compte_tva_19": "", "compte_ht_19": "",
-            "use_timbre": False, "compte_timbre": "",
-            "use_7_percent": False, "compte_tva_7": "", "compte_ht_7": "",
-            "use_cash": False, "compte_caisse": ""
+            "id": None,
+            "name": "New Formula",
+            "client_match": "",
+            "is_default": 0,
+            "compte_client": "",
+            "compte_tva_19": "",
+            "compte_ht_19": "",
+            "use_timbre": 0,
+            "compte_timbre": "",
+            "use_7_percent": 0,
+            "compte_tva_7": "",
+            "compte_ht_7": "",
+            "use_cash": 0,
+            "compte_caisse": ""
         })
         self._refresh_formula_list()
 
     def _delete_formula(self, idx):
         self._sync_formulas_from_ui()
+        formula = self.formulas[idx]
+        if formula.get("id") is not None:
+            self.deleted_ids.append(formula["id"])
         del self.formulas[idx]
         self._refresh_formula_list()
 
     def _save_formulas(self):
         self._sync_formulas_from_ui()
-        save_formulas(self.formulas)
-        messagebox.showinfo("Success", "Formulas saved successfully!")
+        try:
+            for f_id in self.deleted_ids:
+                db.delete_formula(f_id)
+            self.deleted_ids.clear()
+            
+            for f in self.formulas:
+                db.save_formula(f)
+                
+            self.formulas = db.list_formulas()
+            self._refresh_formula_list()
+            messagebox.showinfo("Success", "Formulas saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save formulas: {e}")
 
     def _import_file(self):
         path = filedialog.askopenfilename(title="Choisir le fichier CSV", filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
@@ -188,4 +237,3 @@ class ImportTab(ttk.Frame):
     def _on_next(self):
         if self.on_data_loaded:
             self.on_data_loaded(self.doc_type.get(), self.file_path.get(), self.csv_data)
-            
