@@ -30,30 +30,23 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """Click a nya-bs-select option and force an 'input' event to trigger Angular sync."""
-    found = await page.evaluate(
-        """([olId, text]) => {
-            const ol = document.getElementById(olId);
-            if (!ol) return false;
-            const spans = ol.querySelectorAll('li.nya-bs-option a span.ng-binding');
-            for (const sp of spans) {
-                if (sp.textContent.trim() === text) {
-                    const link = sp.closest('a');
-                    link.click();
-                    // Force Angular to recognize the change
-                    const event = new Event('input', { bubbles: true });
-                    ol.dispatchEvent(event);
-                    return true;
-                }
+    """Click a nya-bs-select option by text and force Angular sync."""
+    await page.evaluate("""([olId, text]) => {
+        const ol = document.getElementById(olId);
+        if (!ol) return;
+        const spans = ol.querySelectorAll('li.nya-bs-option a span.ng-binding');
+        for (const sp of spans) {
+            if (sp.textContent.trim().toLowerCase() === text.toLowerCase()) {
+                sp.closest('a').click();
+                // Trigger change for Angular
+                const event = new Event('change', { bubbles: true });
+                ol.dispatchEvent(event);
+                return;
             }
-            return false;
-        }""",
-        [ol_id, option_text],
-    )
-    if not found:
-        log(f"  ⚠️ WARNING: option '{option_text}' not found in #{ol_id}")
-    # CRITICAL: Always wait after a journal switch for the UI to rebuild
-    await wait(page, 1000)
+        }
+    }""", [ol_id, option_text])
+    await wait(page, 500)
+
 
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the UI."""
@@ -172,37 +165,54 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SET JOURNAL FIRST (This is the most 'destructive' change to the UI)
+    # 1. SELECT JOURNAL (Must be first)
     journal_code = entry["journal"] 
     log(f"  Selecting Journal: {journal_code}")
     await nya_select_by_js(page, "jo-eav", journal_code)
-    await wait_for_spinner(page) # Wait for sequence/period to load
-
-    # 2. SET DATE
-    date = entry["date"]
-    month_idx = int(date.split("/")[1])
-    jour = date.split("/")[0]
-    
-    # Fill actual Date input (triggers period validation)
-    d = page.locator("#ec-date-creation")
-    await d.fill(date)
-    await d.press("Tab")
     await wait_for_spinner(page)
 
-    # 3. SET MONTH & DAY (Redundant but required for some Axeane versions)
+    # 2. DATE AND JOUR (DAY)
+    date_val = entry["date"]  # e.g., "02/03/2026"
+    parts = date_val.split("/")
+    jour = parts[0]
+    month_idx = int(parts[1])
+
+    # Handle Main Date (#ec-date-creation)
+    d_input = page.locator("#ec-date-creation")
+    await d_input.click()
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    await d_input.type(date_val, delay=50)
+    await d_input.press("Tab")
+    await wait_for_spinner(page)
+
+    # Handle Day Field (#inputJourIdEcritureAv) - This was the "dd" error
+    # We use .type() instead of .fill() to respect the mask
+    j_input = page.locator("#inputJourIdEcritureAv")
+    await j_input.click()
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    await j_input.type(jour, delay=100) 
+    await j_input.press("Tab")
+    await wait_for_spinner(page)
+
+    # 3. SELECT MONTH
     month_name = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month_idx]
+    # In your DOM, the ID is inputMoisIdEcriture
     await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
-    
-    j = page.locator("#inputJourIdEcritureAv")
-    await j.fill(jour)
-    await j.press("Tab")
     await wait_for_spinner(page)
 
-    # 4. PIECE & LIBELLE
-    await page.locator("#idDocumentInputMD2").fill(entry["piece"])
-    await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
-    await page.keyboard.press("Tab")
+    # 4. REFERENCE AND LIBELLE
+    # Reference ID from DOM: idDocumentInputMD2
+    ref_input = page.locator("#idDocumentInputMD2")
+    await ref_input.fill(entry["piece"])
+    
+    # Libelle ID from DOM: inputLibelleIdMD2
+    lib_input = page.locator("#inputLibelleIdMD2")
+    await lib_input.fill(entry["libelle"])
+    await lib_input.press("Tab")
+    
     await wait_for_spinner(page)
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
@@ -215,8 +225,9 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     # ("L'écriture N° X doit avoir un crédit ou un débit").
     current_count = await page.locator("tbody tr.td-row").count()
     if idx >= current_count:
-        await page.evaluate("document.querySelector(\"button[ng-click='ajouterEcriture()']\").click()")
-        await wait(page, 300)
+        # From your DOM: the add button is the .td-cb with fa-plus
+        await page.locator(".td-cb .fa-plus").first.click()
+        # Wait for the specific row to exist
         await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=5000)
         await wait_for_spinner(page)
 
