@@ -183,32 +183,28 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SELECT JOURNAL
+    # 1. SET JOURNAL (Switching VT/CA)
     await nya_select_by_js(page, "jo-eav", entry["journal"])
     await wait_for_spinner(page)
 
-    # 2. EXTRACT DATE DATA
-    date_parts = entry["date"].split("/")
-    jour = date_parts[0]
-    month_idx = int(date_parts[1])
+    # 2. EXTRACT DATE
+    parts = entry["date"].split("/")
+    jour = parts[0]
+    month_idx = int(parts[1])
     
-    # 3. FILL JOUR (ENSURE NO "dd")
+    # 3. FILL DAY (Unlock the UI)
     j_input = page.locator("#inputJourIdEcritureAv")
     await j_input.click()
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
-    await j_input.type(jour, delay=50)
+    await j_input.type(jour, delay=100) 
     await j_input.press("Tab")
+    await wait_for_spinner(page) # Wait for UI to validate the day
 
-    # 4. SELECT MOIS (Now using the enhanced selector)
+    # 4. SELECT MOIS
     month_list = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
                   "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-    month_name = month_list[month_idx]
-    
-    # Wait for the month dropdown to be interactable
-    await page.locator("#inputMoisIdEcriture").wait_for(state="visible")
-    await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
-    await wait_for_spinner(page)
+    await nya_select_by_js(page, "inputMoisIdEcriture", month_list[month_idx])
 
     # 5. PIECE & LIBELLE
     await page.locator("#idDocumentInputMD2").fill(entry["piece"])
@@ -218,73 +214,46 @@ async def fill_header(page: Page, entry: dict) -> None:
     
 async def fill_line(page: Page, idx: int, line: dict) -> None:
     await wait_for_spinner(page)
-    current_count = await page.locator("tbody tr.td-row").count()
     
+    # Check how many rows currently exist
+    rows = page.locator("tbody tr.td-row")
+    current_count = await rows.count()
+    
+    # If the row we need (idx) doesn't exist, click the PLUS button
     if idx >= current_count:
-        # Click the "+" button
-        await page.locator("button[ng-click='ajouterEcriture()']").first.click()
-        # Wait for the row to actually appear in the DOM
-        try:
-            await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=3000)
-        except:
-            # Fallback if first click failed
-            await page.locator("button[ng-click='ajouterEcriture()']").first.click()
-            await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=3000)
-        await wait_for_spinner(page)
-
-    row = page.locator("tbody tr.td-row").nth(idx)
-    # ... rest of your line filling code ...
+        # The PLUS icon in the vertical toolbar
+        add_btn = page.locator(".td-cmd .fa-plus").first
+        await add_btn.click()
+        # Wait for the specific row index to appear
+        await rows.nth(idx).wait_for(state="visible", timeout=3000)
     
-    # Fill Compte (Account) using Typeahead keyboard simulation
-    # The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
+    row = rows.nth(idx)
+    
+    # FILL ACCOUNT
     compte_input = row.locator("td.tc-cp input.form-control")
-    await wait_for_spinner(page)
-    await compte_input.scroll_into_view_if_needed()
     await compte_input.click()
     await compte_input.fill(line["account"])
-    await wait(page, 300)
-    await wait_for_spinner(page)
-    
-    # Select the first typeahead suggestion and confirm with Enter
-    await page.keyboard.press("ArrowDown")
-    await wait(page, 100)
-    await page.keyboard.press("Enter")
     await wait(page, 400)
+    await page.keyboard.press("ArrowDown")
+    await page.keyboard.press("Enter")
     await wait_for_spinner(page)
 
-    # Fill Extra Libellé (using stable ID)
-    lb_input = page.locator(f"#exlibelle{idx}")
-    await wait_for_spinner(page)
-    await lb_input.scroll_into_view_if_needed()
-    await lb_input.click()
-    await lb_input.fill(line["label"])
-    await page.keyboard.press("Tab")
-    await wait(page, 300)
-    await wait_for_spinner(page)
-
-    # Fill Débit (using stable ID)
+    # FILL LIBELLE, DEBIT, CREDIT
+    await row.locator(f"#exlibelle{idx}").fill(line["label"])
+    
     debit = float(line["debit"])
     if debit > 0:
-        d_input = page.locator(f"#debit-eav-{idx}")
-        await wait_for_spinner(page)
-        await d_input.scroll_into_view_if_needed()
-        await d_input.click()
-        await d_input.fill(f"{debit:.3f}")
-        await page.keyboard.press("Tab")
-        await wait(page, 300)
-        await wait_for_spinner(page)
+        d_field = row.locator(f"#debit-eav-{idx}")
+        await d_field.fill(f"{debit:.3f}")
+        await d_field.press("Tab")
 
-    # Fill Crédit (using stable ID)
     credit = float(line["credit"])
     if credit > 0:
-        c_input = page.locator(f"#credit-eav-{idx}")
-        await wait_for_spinner(page)
-        await c_input.scroll_into_view_if_needed()
-        await c_input.click()
-        await c_input.fill(f"{credit:.3f}")
-        await page.keyboard.press("Tab")
-        await wait(page, 300)
-        await wait_for_spinner(page)
+        c_field = row.locator(f"#credit-eav-{idx}")
+        await c_field.fill(f"{credit:.3f}")
+        await c_field.press("Tab")
+        
+    await wait_for_spinner(page)
 
 async def cleanup_extra_rows(page: Page, needed: int) -> None:
     """
@@ -388,18 +357,28 @@ async def save_entry(page: Page) -> str | None:
     return await check_for_error_popup(page)
 
 async def reset_form(page: Page) -> None:
-    """Ensure the form is completely cleared and no modals are blocking the UI."""
+    """Wipes the table clean using the toolbar delete button and handles spinners."""
+    log("  🧹 Resetting form for next entry...")
     await wait_for_spinner(page)
     
-    # Click the reset button
-    btn = page.locator("button[ng-click*='resetEcritures']")
-    if await btn.count() > 0:
-        await btn.first.click()
-        await wait(page, 500)
+    # 1. Click the 'Delete All' (Trash) icon in the vertical toolbar (left side of table)
+    trash_btn = page.locator(".td-cmd .fa-trash")
+    if await trash_btn.count() > 0:
+        await trash_btn.first.click()
+        await wait(page, 400)
+        # Handle the confirmation popup if Axeane shows one
+        confirm = page.locator("button:has-text('OUI'), button:has-text('Yes'), .swal2-confirm")
+        if await confirm.count() > 0:
+            await confirm.click()
+
+    # 2. Use the standard reset button as a secondary measure
+    header_reset = page.locator("button[ng-click*='resetEcritures']")
+    if await header_reset.count() > 0:
+        await header_reset.first.click()
     
-    # SPECIAL FIX: Escape any stuck tooltips or menus
-    await page.keyboard.press("Escape")
+    await page.keyboard.press("Escape") # Close any stuck tooltips
     await wait_for_spinner(page)
+    log("  ✅ Form cleared.")
 
 # 🆕 UPDATED: Accepts the UI callback
 # ... [Keep all other functions exactly as they were] ...
