@@ -30,23 +30,41 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """Clicks the dropdown option and forces Axeane/Angular to see the change."""
-    await page.evaluate("""([olId, text]) => {
+    """Enhanced selection for Axeane that handles grouped items and icons."""
+    log(f"    Searching for '{option_text}' in dropdown #{ol_id}...")
+    
+    success = await page.evaluate("""([olId, text]) => {
         const ol = document.getElementById(olId);
-        if (!ol) return;
-        const items = ol.querySelectorAll('li.nya-bs-option');
-        for (const li of items) {
-            const span = li.querySelector('span.ng-binding');
-            if (span && span.textContent.trim().toUpperCase() === text.toUpperCase()) {
-                li.querySelector('a').click();
-                // Tell the 'Man of the House' (Angular) that we changed the value
+        if (!ol) return false;
+
+        // Target only the clickable options, not the group headers
+        const options = ol.querySelectorAll('li.nya-bs-option a');
+
+        for (const a of options) {
+            // Use trim() to handle Axeane's trailing spaces (e.g. 'Mars ')
+            const itemText = a.textContent.trim().toLowerCase();
+            const targetText = text.trim().toLowerCase();
+
+            if (itemText.includes(targetText)) {
+                a.click();
+                
+                // Force Angular model update
                 const scope = angular.element(ol).scope();
-                if (scope) scope.$apply(); 
-                return;
+                if (scope) {
+                    // This tells Axeane's internal logic that a selection was made
+                    scope.$apply();
+                }
+                return true;
             }
         }
+        return false;
     }""", [ol_id, option_text])
-    await page.wait_for_timeout(600) # Wait for UI to rebuild headers
+
+    if not success:
+        log(f"    ⚠️ WARNING: Could not find '{option_text}' in #{ol_id}")
+    
+    await wait(page, 500)
+    
 
 async def get_current_context(page: Page) -> tuple[str, str]:
     """Reads the currently selected Entreprise and Exercice directly from the UI."""
@@ -165,35 +183,39 @@ async def navigate_to_saisie(page: Page) -> None:
 async def fill_header(page: Page, entry: dict) -> None:
     await wait_for_spinner(page)
     
-    # 1. SELECT JOURNAL (DYNAMICALY FROM entry["journal"])
-    log(f"  Selecting Journal: {entry['journal']}")
+    # 1. SELECT JOURNAL
     await nya_select_by_js(page, "jo-eav", entry["journal"])
     await wait_for_spinner(page)
 
-    # 2. FILL JOUR (DAY) - ENSURE NO "dd"
-    parts = entry["date"].split("/")
-    jour = parts[0]
+    # 2. EXTRACT DATE DATA
+    date_parts = entry["date"].split("/")
+    jour = date_parts[0]
+    month_idx = int(date_parts[1])
     
+    # 3. FILL JOUR (ENSURE NO "dd")
     j_input = page.locator("#inputJourIdEcritureAv")
     await j_input.click()
-    # Force clear the field before typing
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
-    await j_input.type(jour, delay=50) 
+    await j_input.type(jour, delay=50)
     await j_input.press("Tab")
-    
-    # 3. FILL MOIS
-    month_idx = int(parts[1])
-    month_name = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
-                  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month_idx]
-    await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
 
-    # 4. LIBELLE & PIECE
+    # 4. SELECT MOIS (Now using the enhanced selector)
+    month_list = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", 
+                  "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+    month_name = month_list[month_idx]
+    
+    # Wait for the month dropdown to be interactable
+    await page.locator("#inputMoisIdEcriture").wait_for(state="visible")
+    await nya_select_by_js(page, "inputMoisIdEcriture", month_name)
+    await wait_for_spinner(page)
+
+    # 5. PIECE & LIBELLE
     await page.locator("#idDocumentInputMD2").fill(entry["piece"])
     await page.locator("#inputLibelleIdMD2").fill(entry["libelle"])
     await page.keyboard.press("Tab")
     await wait_for_spinner(page)
-
+    
 async def fill_line(page: Page, idx: int, line: dict) -> None:
     await wait_for_spinner(page)
     current_count = await page.locator("tbody tr.td-row").count()
