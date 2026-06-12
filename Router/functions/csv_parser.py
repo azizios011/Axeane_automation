@@ -51,52 +51,50 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
             # ── Facture_Formula (also the Default_Formula template) ──────
             lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
 
-            if formula.get("use_timbre"):
-                lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": ZERO, "credit": Decimal("1.000")})
+            # Hardcoded Timbre (437000)
+            lines.append({"account": "437000", "label": "TIMBRE", "debit": ZERO, "credit": Decimal("1.000")})
 
             for rate, ht in ht_by_rate.items():
-                if rate == Decimal("7") and formula.get("use_7_percent"):
-                    lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ZERO, "credit": ht})
+                if rate == Decimal("7"):
+                    lines.append({"account": "707007", "label": "HT 7%", "debit": ZERO, "credit": ht})
                 else:
                     lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ZERO, "credit": ht})
 
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
-                    if rate == Decimal("7") and formula.get("use_7_percent"):
-                        lines.append({"account": formula["compte_tva_7"], "label": "TVA 7%", "debit": ZERO, "credit": tva})
+                    if rate == Decimal("7"):
+                        lines.append({"account": "436707", "label": "TVA 7%", "debit": ZERO, "credit": tva})
                     else:
                         lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": ZERO, "credit": tva})
 
             # ── Cash_Fomula: append CAISSE + a duplicate CLIENTS/TTC row ──
-            # The base CLIENTS row above is untouched; these two extra rows
-            # balance each other (CAISSE debit TTC / CLIENTS credit TTC).
             if is_cash_entry:
                 lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
-                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ttc, "credit": ZERO})
+                lines.append({"account": "541100", "label": "CAISSE", "debit": ttc, "credit": ZERO})
         else:
             # ── Avoir_Formula (exact opposite of Facture) ─────────────────
             lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ZERO, "credit": ttc})
 
-            if formula.get("use_timbre"):
-                lines.append({"account": formula["compte_timbre"], "label": "TIMBRE", "debit": Decimal("1.000"), "credit": ZERO})
+            # Hardcoded Timbre (437000)
+            lines.append({"account": "437000", "label": "TIMBRE", "debit": Decimal("1.000"), "credit": ZERO})
 
             for rate, ht in ht_by_rate.items():
-                if rate == Decimal("7") and formula.get("use_7_percent"):
-                    lines.append({"account": formula["compte_ht_7"], "label": "HT 7%", "debit": ht, "credit": ZERO})
+                if rate == Decimal("7"):
+                    lines.append({"account": "707007", "label": "HT 7%", "debit": ht, "credit": ZERO})
                 else:
                     lines.append({"account": formula["compte_ht_19"], "label": "HT 19%", "debit": ht, "credit": ZERO})
 
             for rate, tva in tva_by_rate.items():
                 if tva > ZERO:
-                    if rate == Decimal("7") and formula.get("use_7_percent"):
-                        lines.append({"account": formula["compte_tva_7"], "label": "TVA 7%", "debit": tva, "credit": ZERO})
+                    if rate == Decimal("7"):
+                        lines.append({"account": "436707", "label": "TVA 7%", "debit": tva, "credit": ZERO})
                     else:
                         lines.append({"account": formula["compte_tva_19"], "label": "TVA 19%", "debit": tva, "credit": ZERO})
 
             # ── Cash_Fomula: append CAISSE + a duplicate CLIENTS/TTC row ──
             if is_cash_entry:
                 lines.append({"account": formula["compte_client"], "label": "CLIENTS", "debit": ttc, "credit": ZERO})
-                lines.append({"account": formula["compte_caisse"], "label": "CAISSE", "debit": ZERO, "credit": ttc})
+                lines.append({"account": "541100", "label": "CAISSE", "debit": ZERO, "credit": ttc})
 
         # ── 0.001_Formula: Solde KPI check ───────────────────────────────
         # 0.000 -> entry is correct, no change.

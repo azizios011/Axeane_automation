@@ -41,10 +41,39 @@ HARD_FALLBACK = {
 }
 
 
+def ensure_default_exists(conn) -> None:
+    # 1. Check if there is a default formula with client_match = ''
+    row = conn.execute("SELECT id FROM formulas WHERE is_default=1 AND client_match='' LIMIT 1").fetchone()
+    if not row:
+        # Check if there is any row with client_match = '' that we can make default
+        row_empty = conn.execute("SELECT id FROM formulas WHERE client_match='' LIMIT 1").fetchone()
+        if row_empty:
+            conn.execute("UPDATE formulas SET is_default=1 WHERE id=?", (row_empty['id'],))
+        else:
+            # Create a brand new default formula!
+            fields = [
+                "name", "client_match", "is_default", "compte_client", "compte_tva_19",
+                "compte_ht_19", "use_timbre", "compte_timbre", "use_7_percent",
+                "compte_tva_7", "compte_ht_7", "use_cash", "compte_caisse"
+            ]
+            values = ["Default", "", 1, "411000", "436719", "707019", 1, "437000", 0, "436707", "707019", 0, "541100"]
+            conn.execute(
+                f"INSERT INTO formulas ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
+                values
+            )
+            
+    # 2. Make sure no other rows are marked as default
+    true_default = conn.execute("SELECT id FROM formulas WHERE is_default=1 AND client_match='' LIMIT 1").fetchone()
+    if true_default:
+        conn.execute("UPDATE formulas SET is_default=0 WHERE id != ?", (true_default['id'],))
+    conn.commit()
+
+
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
+    ensure_default_exists(conn)
     return conn
 
 

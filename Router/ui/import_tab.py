@@ -12,7 +12,6 @@ class ImportTab(ttk.Frame):
         self.csv_data: list[dict] = []
         self.formulas = db.list_formulas()
         self.formula_vars = []
-        self.default_var = tk.IntVar(value=0)
         self.deleted_ids = []
 
         self._build_ui()
@@ -61,14 +60,6 @@ class ImportTab(ttk.Frame):
             
         self.formula_vars = []
         
-        # Determine current default index
-        default_idx = 0
-        for idx, f in enumerate(self.formulas):
-            if f.get('is_default'):
-                default_idx = idx
-                break
-        self.default_var.set(default_idx)
-        
         canvas = tk.Canvas(self.formula_list_frame, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.formula_list_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -85,83 +76,98 @@ class ImportTab(ttk.Frame):
         ttk.Frame(scrollable_frame, height=20).pack(fill=tk.X)
 
     def _build_formula_ui(self, parent, idx, f_data):
-        name_text = f_data.get('name', '')
-        title_text = f"Formula {idx+1}"
-        if name_text:
-            title_text += f": {name_text}"
-        frame = ttk.LabelFrame(parent, text=title_text)
-        frame.pack(fill=tk.X, padx=5, pady=5)
+        is_default = bool(f_data.get('is_default', False))
         
-        vars_dict = {}
-        vars_dict['id'] = f_data.get('id')
-        
-        # Row 0: Name & Client Match & Default & Delete
-        ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
-        vars_dict['name'] = tk.StringVar(value=f_data.get('name', ''))
-        ttk.Entry(frame, textvariable=vars_dict['name'], width=20).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame, text="Client Match:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['client_match'] = tk.StringVar(value=f_data.get('client_match', ''))
-        ttk.Entry(frame, textvariable=vars_dict['client_match'], width=20).grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Radiobutton(frame, text="Default", variable=self.default_var, value=idx).grid(row=0, column=4, padx=5, pady=2)
-        
-        ttk.Button(frame, text="🗑️ Delete", command=lambda: self._delete_formula(idx)).grid(row=0, column=5, padx=5, pady=2)
+        if is_default:
+            frame = ttk.LabelFrame(parent, text="Default Vente Formula (Fallback)")
+            frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            vars_dict = {}
+            vars_dict['id'] = f_data.get('id')
+            vars_dict['name'] = tk.StringVar(value="Default")
+            vars_dict['client_match'] = tk.StringVar(value="")
+            vars_dict['is_default'] = 1
 
-        # Row 1: Base Accounts
-        ttk.Label(frame, text="Compte Client:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_client'] = tk.StringVar(value=f_data.get('compte_client', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_client'], width=15).grid(row=1, column=1, padx=5, pady=2)
+            # Row 0: Base Accounts
+            ttk.Label(frame, text="Compte Client:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_client'] = tk.StringVar(value=f_data.get('compte_client', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_client'], width=15).grid(row=0, column=1, padx=5, pady=2)
 
-        ttk.Label(frame, text="Compte HT 19%:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_ht_19'] = tk.StringVar(value=f_data.get('compte_ht_19', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_ht_19'], width=15).grid(row=1, column=3, padx=5, pady=2)
+            ttk.Label(frame, text="Compte HT 19%:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_ht_19'] = tk.StringVar(value=f_data.get('compte_ht_19', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_ht_19'], width=15).grid(row=0, column=3, padx=5, pady=2)
 
-        # Row 2: TVA 19%
-        ttk.Label(frame, text="Compte TVA 19%:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_tva_19'] = tk.StringVar(value=f_data.get('compte_tva_19', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=2, column=1, padx=5, pady=2)
-        
-        # Row 3: Timbre
-        vars_dict['use_timbre'] = tk.BooleanVar(value=bool(f_data.get('use_timbre', False)))
-        ttk.Checkbutton(frame, text="Include Timbre (1.000)", variable=vars_dict['use_timbre']).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame, text="Compte Timbre:").grid(row=3, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_timbre'] = tk.StringVar(value=f_data.get('compte_timbre', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_timbre'], width=15).grid(row=3, column=3, padx=5, pady=2)
+            # Row 1: TVA 19% and Cash Checkbox
+            ttk.Label(frame, text="Compte TVA 19%:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_tva_19'] = tk.StringVar(value=f_data.get('compte_tva_19', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=1, column=1, padx=5, pady=2)
+            
+            vars_dict['use_cash'] = tk.BooleanVar(value=bool(f_data.get('use_cash', False)))
+            ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=1, column=2, columnspan=2, sticky=tk.W, padx=5, pady=2)
+            
+            # Hardcoded/unused schema values
+            vars_dict['use_timbre'] = tk.BooleanVar(value=True)
+            vars_dict['compte_timbre'] = tk.StringVar(value="437000")
+            vars_dict['use_7_percent'] = tk.BooleanVar(value=False)
+            vars_dict['compte_ht_7'] = tk.StringVar(value="707007")
+            vars_dict['compte_tva_7'] = tk.StringVar(value="436707")
+            vars_dict['compte_caisse'] = tk.StringVar(value="541100")
+            
+        else:
+            name_text = f_data.get('name', '')
+            frame = ttk.LabelFrame(parent, text=f"Custom Formula: {name_text or 'New'}")
+            frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            vars_dict = {}
+            vars_dict['id'] = f_data.get('id')
+            vars_dict['is_default'] = 0
+            
+            # Row 0: Name & Client Match & Delete
+            ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+            vars_dict['name'] = tk.StringVar(value=f_data.get('name', ''))
+            ttk.Entry(frame, textvariable=vars_dict['name'], width=20).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+            
+            ttk.Label(frame, text="Client Match:").grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+            vars_dict['client_match'] = tk.StringVar(value=f_data.get('client_match', ''))
+            ttk.Entry(frame, textvariable=vars_dict['client_match'], width=20).grid(row=0, column=3, sticky=tk.W, padx=5, pady=2)
+            
+            ttk.Button(frame, text="🗑️ Delete", command=lambda: self._delete_formula(idx)).grid(row=0, column=4, padx=5, pady=2)
 
-        # Row 4: 7% Rate
-        vars_dict['use_7_percent'] = tk.BooleanVar(value=bool(f_data.get('use_7_percent', False)))
-        ttk.Checkbutton(frame, text="Include 7% Rate", variable=vars_dict['use_7_percent']).grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
+            # Row 1: Base Accounts
+            ttk.Label(frame, text="Compte Client:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_client'] = tk.StringVar(value=f_data.get('compte_client', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_client'], width=15).grid(row=1, column=1, padx=5, pady=2)
 
-        ttk.Label(frame, text="Compte HT 7%:").grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_ht_7'] = tk.StringVar(value=f_data.get('compte_ht_7', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_ht_7'], width=15).grid(row=4, column=3, padx=5, pady=2)
+            ttk.Label(frame, text="Compte HT 19%:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_ht_19'] = tk.StringVar(value=f_data.get('compte_ht_19', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_ht_19'], width=15).grid(row=1, column=3, padx=5, pady=2)
 
-        # Row 5: TVA 7%
-        ttk.Label(frame, text="Compte TVA 7%:").grid(row=5, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_tva_7'] = tk.StringVar(value=f_data.get('compte_tva_7', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_tva_7'], width=15).grid(row=5, column=3, padx=5, pady=2)
-
-        # Row 6: Cash
-        vars_dict['use_cash'] = tk.BooleanVar(value=bool(f_data.get('use_cash', False)))
-        ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=6, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
-
-        ttk.Label(frame, text="Compte Caisse:").grid(row=6, column=2, sticky=tk.W, padx=5, pady=2)
-        vars_dict['compte_caisse'] = tk.StringVar(value=f_data.get('compte_caisse', ''))
-        ttk.Entry(frame, textvariable=vars_dict['compte_caisse'], width=15).grid(row=6, column=3, padx=5, pady=2)
+            # Row 2: TVA 19% and Cash Checkbox
+            ttk.Label(frame, text="Compte TVA 19%:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+            vars_dict['compte_tva_19'] = tk.StringVar(value=f_data.get('compte_tva_19', ''))
+            ttk.Entry(frame, textvariable=vars_dict['compte_tva_19'], width=15).grid(row=2, column=1, padx=5, pady=2)
+            
+            vars_dict['use_cash'] = tk.BooleanVar(value=bool(f_data.get('use_cash', False)))
+            ttk.Checkbutton(frame, text="Include Cash Logic", variable=vars_dict['use_cash']).grid(row=2, column=2, columnspan=2, sticky=tk.W, padx=5, pady=2)
+            
+            # Hardcoded/unused schema values
+            vars_dict['use_timbre'] = tk.BooleanVar(value=True)
+            vars_dict['compte_timbre'] = tk.StringVar(value="437000")
+            vars_dict['use_7_percent'] = tk.BooleanVar(value=False)
+            vars_dict['compte_ht_7'] = tk.StringVar(value="707007")
+            vars_dict['compte_tva_7'] = tk.StringVar(value="436707")
+            vars_dict['compte_caisse'] = tk.StringVar(value="541100")
 
         self.formula_vars.append(vars_dict)
 
     def _sync_formulas_from_ui(self):
         updated = []
-        default_index = self.default_var.get()
-        for idx, v in enumerate(self.formula_vars):
+        for v in self.formula_vars:
             updated.append({
                 "id": v['id'],
                 "name": v['name'].get().strip(),
                 "client_match": v['client_match'].get().strip(),
-                "is_default": 1 if idx == default_index else 0,
+                "is_default": int(v['is_default']),
                 "compte_client": v['compte_client'].get().strip(),
                 "compte_tva_19": v['compte_tva_19'].get().strip(),
                 "compte_ht_19": v['compte_ht_19'].get().strip(),
@@ -185,13 +191,13 @@ class ImportTab(ttk.Frame):
             "compte_client": "",
             "compte_tva_19": "",
             "compte_ht_19": "",
-            "use_timbre": 0,
-            "compte_timbre": "",
+            "use_timbre": 1,
+            "compte_timbre": "437000",
             "use_7_percent": 0,
-            "compte_tva_7": "",
-            "compte_ht_7": "",
+            "compte_tva_7": "436707",
+            "compte_ht_7": "707019",
             "use_cash": 0,
-            "compte_caisse": ""
+            "compte_caisse": "541100"
         })
         self._refresh_formula_list()
 
