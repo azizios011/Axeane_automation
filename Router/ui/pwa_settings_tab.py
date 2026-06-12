@@ -142,17 +142,18 @@ class PwaSettingsTab(ttk.Frame):
 
     # 🆕 NEW: Added flags to stop Tracking Prevention and Notifications
         cmd = [
-            exe,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-notifications",             # Stops the Notification error
-            "--disable-blink-features=AutomationControlled", # Makes Axeane think you are a human
-            "--disable-features=TrackingPrevention", # Disables Edge Tracking Prevention
-            "--ignore-certificate-errors",
-            url
-        ]
+        exe,
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-notifications",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=TrackingPrevention",
+        "--enable-logging",      # 🆕 Enables internal browser logging
+        "--v=1",                 # 🆕 Verbosity level 1 (shows errors)
+        url
+    ]
     
         try:
             subprocess.Popen(cmd)

@@ -34,18 +34,27 @@ class MainWindow:
         self.csv_table_tab.load_data(doc_type, file_path, data)
         self.notebook.select(2)
 
+    def _on_browser_log(self, message: str):
+        # Add the message to the log in Tab 3
+        self.csv_table_tab.add_log_message(message, prefix="⚠️") 
+
     def _on_process(self, mapping: dict, data: list[dict], doc_type: str):
         if not self.pwa_tab.is_verified:
             tk.messagebox.showwarning("Verification Required", "Please complete Turnstile verification in Tab 1.")
             self.notebook.select(0)
             return
 
+        # Callback for row colors
         def update_ui_callback(ref: str, status: str):
             self.csv_table_tab.update_row_color(ref, status)
+ # 🆕 Callback for Browser Debugging Logs
+        def browser_log_callback(msg: str):
+            self.pwa_tab._log_safe(msg) # This sends errors to the black console in Tab 1
 
         if self.on_process_callback:
-            self.on_process_callback(mapping, data, doc_type, update_ui_callback)
-
+            # Pass both callbacks
+            self.on_process_callback(mapping, data, doc_type, update_ui_callback, browser_log_callback)
+        
     def _on_stop(self):
         if self.on_stop_callback:
             self.on_stop_callback()

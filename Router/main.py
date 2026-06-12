@@ -8,7 +8,7 @@ from data.migrate_formulas import migrate
 
 stop_event = threading.Event()
 
-def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_ui_callback=None):
+def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_ui_callback=None, browser_log_callback=None):
     log(f"Processing data for document type: {doc_type}...")
     entries = parse_csv_with_mapping(mapping, raw_data, doc_type)
     
@@ -26,13 +26,14 @@ def on_process_data(mapping: dict, raw_data: list[dict], doc_type: str, update_u
     
     def run_async():
         try:
-            asyncio.run(run(entries, update_ui_callback, stop_event))
+            # 🆕 Pass the log callback to the run function
+            asyncio.run(run(entries, update_ui_callback, stop_event, browser_log_callback))
             log("✅ Automation finished successfully!")
         except Exception as e:
             log(f"❌ Automation failed: {e}")
 
     threading.Thread(target=run_async, daemon=True).start()
-
+    
 def stop_automation():
     log("🛑 Stop requested by user...")
     stop_event.set()
