@@ -174,18 +174,23 @@ async def fill_header(page: Page, entry: dict) -> None:
     await wait(page)
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
-    # 1. Add new row via JS if needed
-    if idx > 0:
+    # ── Row management ────────────────────────────────────────────────────
+    # The form opens with a couple of default empty rows already present.
+    # Only click "ajouterEcriture()" if row `idx` doesn't exist yet —
+    # blindly adding a row for every idx>0 creates extra unfilled rows
+    # that Axeane's own save validation rejects
+    # ("L'écriture N° X doit avoir un crédit ou un débit").
+    current_count = await page.locator("tbody tr.td-row").count()
+    if idx >= current_count:
         await page.evaluate("document.querySelector(\"button[ng-click='ajouterEcriture()']\").click()")
         await wait(page, 300)
-        # Wait for the new row to actually render in the DOM before interacting
         await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=5000)
 
-    # 2. Get the specific row (needed for the Compte field which has a dynamic ID)
+    # Get the specific row (needed for the Compte field which has a dynamic ID)
     row = page.locator("tbody tr.td-row").nth(idx)
     
-    # 3. Fill Compte (Account) using Typeahead keyboard simulation
-    # 🆕 The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
+    # Fill Compte (Account) using Typeahead keyboard simulation
+    # The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
     compte_input = row.locator("td.tc-cp input.form-control")
     await compte_input.scroll_into_view_if_needed()
     await compte_input.click()
@@ -198,7 +203,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     await page.keyboard.press("Enter")
     await wait(page, 400)
 
-    # 4. Fill Extra Libellé (using stable ID)
+    # Fill Extra Libellé (using stable ID)
     lb_input = page.locator(f"#exlibelle{idx}")
     await lb_input.scroll_into_view_if_needed()
     await lb_input.click()
@@ -206,7 +211,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     await page.keyboard.press("Tab")
     await wait(page, 300)
 
-    # 5. Fill Débit (using stable ID)
+    # Fill Débit (using stable ID)
     debit = float(line["debit"])
     if debit > 0:
         d_input = page.locator(f"#debit-eav-{idx}")
@@ -216,7 +221,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
         await page.keyboard.press("Tab")
         await wait(page, 300)
 
-    # 6. Fill Crédit (using stable ID)
+    # Fill Crédit (using stable ID)
     credit = float(line["credit"])
     if credit > 0:
         c_input = page.locator(f"#credit-eav-{idx}")
@@ -225,6 +230,30 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
         await c_input.fill(f"{credit:.3f}")
         await page.keyboard.press("Tab")
         await wait(page, 300)
+
+async def cleanup_extra_rows(page: Page, needed: int) -> None:
+    """
+    Safety net: if more rows exist than the entry actually needed
+    (e.g. an unexpected leftover default row), delete the extras
+    before saving so Axeane's save validation doesn't reject them.
+    """
+    current_count = await page.locator("tbody tr.td-row").count()
+    for idx in range(current_count - 1, needed - 1, -1):
+        row = page.locator("tbody tr.td-row").nth(idx)
+        deleted = await page.evaluate(
+            """(rowEl) => {
+                const btn = rowEl.querySelector("button[ng-click*='supprimer'], button[ng-click*='delete'], .fa-trash, .fa-trash-o");
+                if (btn) { (btn.closest('button') || btn).click(); return true; }
+                return false;
+            }""",
+            await row.element_handle(),
+        )
+        if deleted:
+            log(f"  🗑️ Removed leftover empty row {idx}")
+            await wait(page, 300)
+        else:
+            log(f"  ⚠️ Leftover empty row {idx} found but no delete button matched — leaving as-is")
+            break
 
 # 🆕 NEW: Verification System
 async def verify_entry(page: Page, entry: dict, update_ui_callback):
@@ -269,10 +298,37 @@ async def verify_entry(page: Page, entry: dict, update_ui_callback):
         
     return is_balanced
 
-async def save_entry(page: Page) -> None:
+async def check_for_error_popup(page: Page) -> str | None:
+    """
+    After clicking Enregistrer, Axeane may show an "Erreur" modal
+    (e.g. "L'écriture N° 5 doit avoir un crédit ou un débit").
+    Returns the error message if found (and closes the modal), else None.
+    """
+    await wait(page, 400)
+    try:
+        msg = await page.evaluate("""() => {
+            const candidates = document.querySelectorAll('.modal, .ax-modal, [role="alertdialog"], .swal2-popup');
+            for (const el of candidates) {
+                if (el.offsetParent === null) continue;
+                const text = el.textContent || '';
+                if (/erreur/i.test(text)) {
+                    const closeBtn = el.querySelector('.close, button[aria-label="Close"], .swal2-confirm, .swal2-close');
+                    if (closeBtn) closeBtn.click();
+                    return text.trim().replace(/\\s+/g, ' ');
+                }
+            }
+            return null;
+        }""")
+        return msg
+    except Exception:
+        return None
+
+async def save_entry(page: Page) -> str | None:
+    """Clicks Enregistrer and returns an error message string if Axeane rejected the save, else None."""
     await page.locator("#ec-save").scroll_into_view_if_needed()
     await page.locator("#ec-save").click()
     await wait(page, 1500)
+    return await check_for_error_popup(page)
 
 async def reset_form(page: Page) -> None:
     btn = page.locator("button[ng-click*='resetEcritures']")
@@ -311,7 +367,7 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> 
                 break
                 
             if not entry.get("balanced", True):
-                log(f"SKIP {entry['docRef']} — not balanced locally")
+                log(f"SKIP {entry['docRef']} — not balanced locally ({entry.get('error_reason')})")
                 if update_ui_callback: update_ui_callback(entry['docRef'], 'error')
                 continue
 
@@ -321,15 +377,22 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> 
             for j, line in enumerate(entry["lines"]):
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
                 await fill_line(page, j, line)
-                
+
+            # Safety net: remove any leftover default rows beyond what we filled
+            await cleanup_extra_rows(page, len(entry["lines"]))
+
             is_verified = await verify_entry(page, entry, update_ui_callback)
             
             if is_verified:
-                await save_entry(page)
-                await reset_form(page)
+                save_error = await save_entry(page)
+                if save_error:
+                    log(f"  ❌ Axeane rejected save for {entry['docRef']}: {save_error}")
+                    if update_ui_callback: update_ui_callback(entry['docRef'], 'error')
+                else:
+                    await reset_form(page)
             else:
                 log(f"  ❌ SKIPPING SAVE: Entry {entry['docRef']} is not balanced in Axeane UI!")
                 await reset_form(page)
 
         log("Done — all entries processed.")
-        
+    
