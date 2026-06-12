@@ -7,6 +7,22 @@ async def wait(page: Page, ms: int = None) -> None:
     delay = ms if ms is not None else SETTINGS.get("slow_mo", 300)
     await page.wait_for_timeout(delay)
 
+async def wait_for_spinner(page: Page, timeout: int = 30000) -> None:
+    """Wait for spinner/loading modals to disappear."""
+    try:
+        await page.wait_for_function(
+            """() => {
+                const spinners = document.querySelectorAll('.nx-modern-spinner-modal, .modal.in, [uib-modal-window], .loading-spinner');
+                for (const el of spinners) {
+                    if (el.offsetParent !== null) return false;
+                }
+                return true;
+            }""",
+            timeout=timeout,
+        )
+    except PWTimeout:
+        log("  ⚠️ Spinner timeout, proceeding anyway")
+
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
     """Click a nya-bs-select option by its visible text via JS."""
     found = await page.evaluate(
@@ -145,6 +161,7 @@ async def navigate_to_saisie(page: Page) -> None:
     log("✅ Saisie des écritures opened")
 
 async def fill_header(page: Page, entry: dict) -> None:
+    await wait_for_spinner(page)
     date = entry["date"]
     month = int(date.split("/")[1])
     jour = date.split("/")[0]
@@ -153,27 +170,34 @@ async def fill_header(page: Page, entry: dict) -> None:
     await d.scroll_into_view_if_needed()
     await d.click(); await d.fill(date); await d.press("Tab")
     await wait(page)
+    await wait_for_spinner(page)
     
     journal_code = "CA" if entry.get("is_cash") else entry["journal"]
     await nya_select_by_js(page, "jo-eav", journal_code)
+    await wait_for_spinner(page)
     await nya_select_by_js(page, "inputMoisIdEcriture", ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"][month])
+    await wait_for_spinner(page)
     
     j = page.locator("#inputJourIdEcritureAv")
     await j.scroll_into_view_if_needed()
     await j.click(); await j.fill(jour); await j.press("Tab")
     await wait(page)
+    await wait_for_spinner(page)
     
     p = page.locator("#idDocumentInputMD2")
     await p.scroll_into_view_if_needed()
     await p.click(); await p.fill(entry["piece"]); await p.press("Tab")
     await wait(page)
+    await wait_for_spinner(page)
     
     lb = page.locator("#inputLibelleIdMD2")
     await lb.scroll_into_view_if_needed()
     await lb.click(); await lb.fill(entry["libelle"]); await lb.press("Tab")
     await wait(page)
+    await wait_for_spinner(page)
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
+    await wait_for_spinner(page)
     # ── Row management ────────────────────────────────────────────────────
     # The form opens with a couple of default empty rows already present.
     # Only click "ajouterEcriture()" if row `idx` doesn't exist yet —
@@ -185,6 +209,7 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
         await page.evaluate("document.querySelector(\"button[ng-click='ajouterEcriture()']\").click()")
         await wait(page, 300)
         await page.locator("tbody tr.td-row").nth(idx).wait_for(state="visible", timeout=5000)
+        await wait_for_spinner(page)
 
     # Get the specific row (needed for the Compte field which has a dynamic ID)
     row = page.locator("tbody tr.td-row").nth(idx)
@@ -192,44 +217,53 @@ async def fill_line(page: Page, idx: int, line: dict) -> None:
     # Fill Compte (Account) using Typeahead keyboard simulation
     # The ID for compte is dynamic (e.g., cc_0_3), so we locate it by its column class 'tc-cp'
     compte_input = row.locator("td.tc-cp input.form-control")
+    await wait_for_spinner(page)
     await compte_input.scroll_into_view_if_needed()
     await compte_input.click()
     await compte_input.fill(line["account"])
     await wait(page, 300)
+    await wait_for_spinner(page)
     
     # Select the first typeahead suggestion and confirm with Enter
     await page.keyboard.press("ArrowDown")
     await wait(page, 100)
     await page.keyboard.press("Enter")
     await wait(page, 400)
+    await wait_for_spinner(page)
 
     # Fill Extra Libellé (using stable ID)
     lb_input = page.locator(f"#exlibelle{idx}")
+    await wait_for_spinner(page)
     await lb_input.scroll_into_view_if_needed()
     await lb_input.click()
     await lb_input.fill(line["label"])
     await page.keyboard.press("Tab")
     await wait(page, 300)
+    await wait_for_spinner(page)
 
     # Fill Débit (using stable ID)
     debit = float(line["debit"])
     if debit > 0:
         d_input = page.locator(f"#debit-eav-{idx}")
+        await wait_for_spinner(page)
         await d_input.scroll_into_view_if_needed()
         await d_input.click()
         await d_input.fill(f"{debit:.3f}")
         await page.keyboard.press("Tab")
         await wait(page, 300)
+        await wait_for_spinner(page)
 
     # Fill Crédit (using stable ID)
     credit = float(line["credit"])
     if credit > 0:
         c_input = page.locator(f"#credit-eav-{idx}")
+        await wait_for_spinner(page)
         await c_input.scroll_into_view_if_needed()
         await c_input.click()
         await c_input.fill(f"{credit:.3f}")
         await page.keyboard.press("Tab")
         await wait(page, 300)
+        await wait_for_spinner(page)
 
 async def cleanup_extra_rows(page: Page, needed: int) -> None:
     """
@@ -373,6 +407,7 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None) -> 
 
             log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
             
+            await wait_for_spinner(page)
             await fill_header(page, entry)
             for j, line in enumerate(entry["lines"]):
                 log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
