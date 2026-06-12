@@ -29,12 +29,12 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
     for ref, rows in groups.items():
         first = rows[0]
         avoir = is_avoir(first.get("operation", ""))
-        client_raw_name = first.get("client", "")
+        client_raw = first.get("client", "")
         ttc = abs(first.get("ttc", ZERO))
 
-        formula = get_formula(client_raw_name)
+        formula = get_formula(client_raw)
+        # 2. Check the box of cash logic dynamically
         is_cash_entry = bool(formula.get("use_cash", False))
-
 
         # ── 7%_Rate_Formula: group rows sharing the same ref by TVA rate ──
         # If a ref appears twice with different TVA% (e.g. 19% and 7%),
@@ -124,23 +124,19 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
         libelle = client_raw.split("|", 1)[-1].strip().upper() if "|" in client_raw else client_raw.strip().upper()
         piece = ref.split("/")[0].strip() if "/" in ref else ref.strip()
 
-# ... inside the loop in parse_csv_with_mapping ...
         # Determine Journal: CA if cash logic is active, otherwise the default for the doc_type
-        if is_cash_entry:
-            journal_code = "CA"
-        else:
-            journal_code = "VT" if doc_type == "Vente" else "AC"
+        journal_code = "CA" if is_cash_entry else "VT"
 
         entries.append({
             "docRef": ref,
             "date": first.get("date", ""),
-            "journal": journal_code, # This must be explicit
+            "journal": journal_code, # Dynamically assigned from DB
             "libelle": libelle,
             "piece": piece,
             "balanced": balanced,
             "error_reason": error_reason,
             "lines": lines,
-            "is_cash": is_cash_entry 
+            "is_cash": is_cash_entry,
         })
 
     n_unbalanced = sum(1 for e in entries if not e["balanced"])
