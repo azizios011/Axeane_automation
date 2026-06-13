@@ -11,7 +11,8 @@ DEFAULT_SETTINGS = {
     "axeane_password": "",
     "axeane_entreprise": "CPR",       # 🆕 Added
     "axeane_exercice": "EX 2026",     # 🆕 Added
-    "slow_mo": 300
+    "slow_mo": 300,
+    "debug_compte_shape": False       # 🆕 One-shot diagnostic dump of compte model shape
 }
 
 def load_settings() -> dict:
@@ -44,6 +45,9 @@ LBL_HT_19 = "VT DE MARCHANDISE"
 LBL_HT_7 = "HTVA 7%"
 LBL_TVA = "TVA COLLECTEE"
 LBL_ROUND = "AJUST ARRONDI"
+
+# ── Defaults ──────────────────────────────────────────────────────────────────
+DEFAULT_DEVISE = "TND"
 
 # ── Regex & Constants ────────────────────────────────────────────────────────
 CASH_RE = re.compile(r"passager|comptant|caisse|fj pass", re.I)
