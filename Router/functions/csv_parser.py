@@ -49,6 +49,8 @@ def parse_csv_with_mapping(mapping: dict, raw_data: list[dict], doc_type: str) -
             "date": first.get("date", ""),
             "journal": "CA" if is_cash_entry else "VT",
             "devise": devise,
+            "piece": ref,                              # 🆕 fixes KeyError 'piece'
+            "libelle": (client_raw or ref).upper(),    # 🆕 fixes KeyError 'libelle'
             "lines": lines,
             "balanced": True # After rounding check
         })
