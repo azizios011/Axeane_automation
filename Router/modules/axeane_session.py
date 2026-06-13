@@ -6,7 +6,7 @@ from functions.helpers import log
 SCOPE_ROOT_SELECTOR = ".td-root"
 
 # ─────────────────────────────────────────────────────────────────────────
-# Helpers & JS Bridge
+# Helpers
 # ─────────────────────────────────────────────────────────────────────────
 
 async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
@@ -37,25 +37,18 @@ async def eval_scope(page: Page, body: str, args: list = None) -> dict:
     return await page.evaluate(js, args)
 
 # ─────────────────────────────────────────────────────────────────────────
-# Login & Navigation (Restored Login logic)
+# Login & Navigation
 # ─────────────────────────────────────────────────────────────────────────
 
 async def do_login(page: Page) -> None:
-    """Handles the Authentification modal from your screenshot."""
     if await page.locator("#loginInput").count() > 0:
         log(f"Logging in as {SETTINGS.get('axeane_user')}...")
         await page.locator("#loginInput").fill(SETTINGS.get("axeane_user"))
         await page.locator("#passwordInput").fill(SETTINGS.get("axeane_password"))
-        
-        # Click the 'Connexion' button
         await page.click("button[aria-label='Connexion']")
-        
-        # Wait for the login modal to disappear
         try:
             await page.wait_for_selector(".auth-modal-window", state="hidden", timeout=15000)
-            log("  ✅ Login successful.")
         except:
-            # Force close if stuck
             await page.evaluate("document.querySelectorAll('.auth-modal-window, .modal-backdrop').forEach(el => el.remove())")
 
 async def select_context(page: Page):
@@ -63,7 +56,6 @@ async def select_context(page: Page):
     exercice = SETTINGS.get("axeane_exercice", "EX 2026")
     log(f"Setting Context: {entreprise} / {exercice}")
     
-    # Kill blocking UI elements
     await page.evaluate("document.querySelectorAll('.modal-backdrop, .nx-modern-spinner-modal').forEach(el => el.remove())")
     
     if not await page.evaluate("$('.axe-sidebar').hasClass('nax-side-bar-menu-active')"):
@@ -83,7 +75,7 @@ async def select_context(page: Page):
     await page.evaluate("document.getElementById('menuBtn').click()")
 
 # ─────────────────────────────────────────────────────────────────────────
-# Accounting Entry Logic
+# The "Mvt" Fix Logic
 # ─────────────────────────────────────────────────────────────────────────
 
 async def fill_header(page: Page, entry: dict):
@@ -91,20 +83,39 @@ async def fill_header(page: Page, entry: dict):
     piece = entry["piece"].split("/")[0]
     libelle = entry["libelle"].split("|")[-1].strip()
 
+    # We fill in steps to trigger the Mvt generation
+    # Step 1: Set Journal & Month
     await eval_scope(page, """
         const entId = scope.contextComptable.currentEntreprise.entrepriseId;
         const jour = scope.mapCodeJournauxEntreprise[entId].find(j => j.code === a0);
-        if (jour) { scope.ecritureGrouping.journal = jour; scope.JournalCodeChanges(); }
-        scope.items.jourDocComptable = a1;
-        scope.items.selectedMoisDocComptable = scope.moisList[parseInt(a2) - 1];
-        scope.ecritureGrouping.piece = a3;
-        scope.ecritureGrouping.libelle = a4;
-        // Mvt, Devise, and Op Date are handled by Axeane.
-    """, [entry["journal"], parts[0], parts[1], piece, libelle])
-    log(f"  ✅ Header: {piece} | {libelle}")
+        if (jour) { 
+            scope.ecritureGrouping.journal = jour; 
+            scope.JournalCodeChanges(); 
+        }
+        scope.items.selectedMoisDocComptable = scope.moisList[parseInt(a1) - 1];
+    """, [entry["journal"], parts[1]])
+    
+    await asyncio.sleep(0.5)
+
+    # Step 2: Set Day & Trigger Movement Calculation
+    await eval_scope(page, """
+        scope.items.jourDocComptable = a0;
+        // This is the function Axeane calls to generate the Mvt number
+        if(scope.checkMoisCloture) scope.checkMoisCloture();
+    """, [parts[0]])
+    
+    await asyncio.sleep(0.8) # Wait for Axeane to generate Mvt
+
+    # Step 3: Set Piece & Libelle
+    await eval_scope(page, """
+        scope.ecritureGrouping.piece = a0;
+        scope.ecritureGrouping.libelle = a1;
+    """, [piece, libelle])
+    
+    log(f"  ✅ Header & Mvt ready: {piece}")
 
 async def fill_line(page: Page, idx: int, line: dict):
-    # Setup Debit/Credit via JS
+    # Setup row values via JS
     await eval_scope(page, """
         let row = scope.ecritureGrouping.ecritureComptables[a4];
         if (!row) { scope.ajouterEcriture(); row = scope.ecritureGrouping.ecritureComptables[a4]; }
@@ -113,35 +124,39 @@ async def fill_line(page: Page, idx: int, line: dict):
         row.extraLibelle = a3;
     """, [None, str(line["debit"]), str(line["credit"]), line["label"], idx])
 
-    # Fill Account via Keyboard to trigger Axeane's internal calculations
+    # Interactive Account Selection
     selector = f"input#cc_{idx}_3"
     try:
         await page.wait_for_selector(selector, timeout=5000)
         await page.click(selector)
         await page.keyboard.press("Control+A")
         await page.keyboard.press("Backspace")
-        await page.keyboard.type(str(line["account"]), delay=60)
-        await asyncio.sleep(0.8) 
+        await page.keyboard.type(str(line["account"]), delay=70)
+        await asyncio.sleep(1.0) # Wait for dropdown
         await page.keyboard.press("Enter")
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.3)
         await page.keyboard.press("Tab")
         await wait_for_spinner(page)
     except:
         log(f"    ⚠️ Account {line['account']} failed.")
 
 async def verify_and_save(page: Page, ref: str, callback) -> bool:
-    # Read truth from UI badges
+    # Check the UI badges for real totals
     kpis = await page.evaluate("""() => {
         const s = document.querySelector('.ax-badge-kpi.ax-badge-purple .ax-badge-kpi-value');
         const d = document.querySelector('.ax-badge-kpi.ax-badge-green .ax-badge-kpi-value');
+        const mvt = document.querySelector('input[ng-model="ecritureGrouping.mvt"]');
         return { 
             solde: s ? s.textContent.trim() : "999", 
-            debit: d ? d.textContent.trim() : "0,000" 
+            debit: d ? d.textContent.trim() : "0,000",
+            mvt: mvt ? mvt.value : "" 
         };
     }""")
     
-    is_bal = "0,000" in kpis['solde'] and kpis['debit'] != "0,000"
-    log(f"  📊 Balanced: {is_bal} ({kpis['solde']})")
+    # Validation: Balanced AND Debit > 0 AND Mvt is NOT empty
+    is_bal = "0,000" in kpis['solde'] and kpis['debit'] != "0,000" and kpis['mvt'] != ""
+    
+    log(f"  📊 Verification -> Mvt: {kpis['mvt']} | Balanced: {is_bal}")
     
     if callback: callback(ref, 'success' if is_bal else 'error')
     
@@ -149,10 +164,12 @@ async def verify_and_save(page: Page, ref: str, callback) -> bool:
         await eval_scope(page, "scope.saveEcriture();")
         await wait_for_spinner(page)
         return True
+    
+    log("  ❌ Blocked: Mvt missing or Totals are zero.")
     return False
 
 # ─────────────────────────────────────────────────────────────────────────
-# Main Execution Loop
+# Main Execution
 # ─────────────────────────────────────────────────────────────────────────
 
 async def run(entries: list[dict], update_ui_callback=None, stop_event=None, browser_log_callback=None):
@@ -162,13 +179,10 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
         page = next(p for ctx in browser.contexts for p in ctx.pages if "kompta" in p.url.lower())
         await page.bring_to_front()
         
-        # RESTORED: Login step
         await do_login(page)
-        
-        # Context Selection
         await select_context(page)
         
-        # Navigation to advance entry
+        # Open main menu
         await page.evaluate("""() => {
             const m = [...document.querySelectorAll('.nax-main-menu-item span')].find(s => s.textContent.includes('Comptabilité'));
             if(m) m.click();
@@ -180,9 +194,12 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
         for i, entry in enumerate(entries):
             if stop_event and stop_event.is_set(): break
             log(f"[{i+1}/{len(entries)}] {entry['docRef']}")
+            
             await eval_scope(page, "scope.resetEcritures(); scope.unsetModele();")
             await fill_header(page, entry)
+            
             for j, line in enumerate(entry["lines"]):
                 await fill_line(page, j, line)
+            
             await verify_and_save(page, entry['docRef'], update_ui_callback)
             
