@@ -3,79 +3,91 @@ from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwrig
 from data.config import SETTINGS
 from functions.helpers import log
 
-SCOPE_ROOT_SELECTOR = ".td-root"
-
 # ─────────────────────────────────────────────────────────────────────────
-# Helpers
+# Human-Like Helpers
 # ─────────────────────────────────────────────────────────────────────────
 
-async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
+async def wait(page: Page, ms: int = None):
+    await page.wait_for_timeout(ms if ms else SETTINGS.get("slow_mo", 300))
+
+async def wait_for_spinner(page: Page, timeout: int = 40000):
+    """Wait for loading spinners or modals to disappear."""
     try:
+        await wait(page, 500)
         await page.wait_for_function(
-            """() => {
-                const spinners = document.querySelectorAll('.nx-modern-spinner-modal, .modal.in, [uib-modal-window], .loading-spinner');
-                for (const el of spinners) { if (el.offsetParent !== null) return false; }
-                return true;
-            }""",
-            timeout=timeout,
+            """() => ![...document.querySelectorAll('.nx-modern-spinner-modal, .modal.in, .loading-spinner')]
+               .some(el => el.offsetParent !== null)""",
+            timeout=timeout
         )
+        await wait(page, 300)
     except: pass
 
-async def eval_scope(page: Page, body: str, args: list = None) -> dict:
-    if args is None: args = []
-    while len(args) < 5: args.append(None)
-    js = f"""(args) => {{
-        const [a0, a1, a2, a3, a4] = args;
-        const root = document.querySelector('{SCOPE_ROOT_SELECTOR}');
-        const scope = angular.element(root).scope();
-        try {{
-            const result = (function(scope, a0, a1, a2, a3, a4) {{ {body} }})(scope, a0, a1, a2, a3, a4);
-            if (!scope.$root.$$phase) scope.$apply();
-            return {{ ok: true, result: result }};
-        }} catch (e) {{ return {{ ok: false, error: e.message }}; }}
-    }}"""
-    return await page.evaluate(js, args)
+async def select_dropdown(page: Page, container_selector: str, text: str):
+    """Cents a dropdown, types in search, and clicks the result."""
+    try:
+        btn = f"{container_selector} button.dropdown-toggle"
+        await page.wait_for_selector(btn, timeout=5000)
+        await page.click(btn)
+        await wait(page, 400)
+        
+        # Type into search if it exists
+        search = f"{container_selector} .bs-searchbox input"
+        if await page.locator(search).is_visible():
+            await page.locator(search).fill(text)
+            await wait(page, 500)
+        
+        # Click the option
+        option = f"{container_selector} li.nya-bs-option a"
+        options = page.locator(option)
+        count = await options.count()
+        for i in range(count):
+            content = await options.nth(i).text_content()
+            if text.upper() in content.strip().upper():
+                await options.nth(i).click()
+                return True
+        # Fallback: Press Enter
+        await page.keyboard.press("Enter")
+        return True
+    except: return False
 
 # ─────────────────────────────────────────────────────────────────────────
-# Login & Navigation
+# Navigation & Login
 # ─────────────────────────────────────────────────────────────────────────
 
-async def do_login(page: Page) -> None:
+async def do_login(page: Page):
     if await page.locator("#loginInput").count() > 0:
         log(f"Logging in as {SETTINGS.get('axeane_user')}...")
         await page.locator("#loginInput").fill(SETTINGS.get("axeane_user"))
         await page.locator("#passwordInput").fill(SETTINGS.get("axeane_password"))
         await page.click("button[aria-label='Connexion']")
-        try:
-            await page.wait_for_selector(".auth-modal-window", state="hidden", timeout=15000)
-        except:
-            await page.evaluate("document.querySelectorAll('.auth-modal-window, .modal-backdrop').forEach(el => el.remove())")
+        await wait_for_spinner(page)
 
 async def select_context(page: Page):
-    entreprise = SETTINGS.get("axeane_entreprise", "CPR")
-    exercice = SETTINGS.get("axeane_exercice", "EX 2026")
-    log(f"Setting Context: {entreprise} / {exercice}")
+    ent = SETTINGS.get("axeane_entreprise", "CPR")
+    exe = SETTINGS.get("axeane_exercice", "EX 2026")
+    log(f"Setting Context: {ent} / {exe}")
     
-    await page.evaluate("document.querySelectorAll('.modal-backdrop, .nx-modern-spinner-modal').forEach(el => el.remove())")
-    
-    if not await page.evaluate("$('.axe-sidebar').hasClass('nax-side-bar-menu-active')"):
-        await page.evaluate("document.getElementById('menuBtn').click()")
+    # Force close any blocking backdrops
+    await page.evaluate("document.querySelectorAll('.modal-backdrop').forEach(el => el.remove())")
+
+    # Open sidebar
+    is_open = await page.evaluate("$('.axe-sidebar').hasClass('nax-side-bar-menu-active')")
+    if not is_open:
+        await page.click("#menuBtn")
         await page.wait_for_selector(".axe-sidebar.nax-side-bar-menu-active")
 
-    for id, val in [("entreprise", entreprise), ("exercice", exercice)]:
-        btn = f".axe-sidebar #{id} button"
-        inp = f".axe-sidebar #{id} .bs-searchbox input"
-        await page.locator(btn).first.click()
-        await page.locator(inp).first.fill(val)
-        await asyncio.sleep(0.5)
-        await page.keyboard.press("Enter")
-        await wait_for_spinner(page)
-        await asyncio.sleep(1)
-
-    await page.evaluate("document.getElementById('menuBtn').click()")
+    await select_dropdown(page, "#entreprise", ent)
+    await wait_for_spinner(page)
+    await wait(page, 1000)
+    
+    await select_dropdown(page, "#exercice", exe)
+    await wait_for_spinner(page)
+    
+    # Close sidebar
+    await page.click("#menuBtn")
 
 # ─────────────────────────────────────────────────────────────────────────
-# The "Mvt" Fix Logic
+# Saisie Form Interaction
 # ─────────────────────────────────────────────────────────────────────────
 
 async def fill_header(page: Page, entry: dict):
@@ -83,89 +95,85 @@ async def fill_header(page: Page, entry: dict):
     piece = entry["piece"].split("/")[0]
     libelle = entry["libelle"].split("|")[-1].strip()
 
-    # We fill in steps to trigger the Mvt generation
-    # Step 1: Set Journal & Month
-    await eval_scope(page, """
-        const entId = scope.contextComptable.currentEntreprise.entrepriseId;
-        const jour = scope.mapCodeJournauxEntreprise[entId].find(j => j.code === a0);
-        if (jour) { 
-            scope.ecritureGrouping.journal = jour; 
-            scope.JournalCodeChanges(); 
-        }
-        scope.items.selectedMoisDocComptable = scope.moisList[parseInt(a1) - 1];
-    """, [entry["journal"], parts[1]])
+    # 1. Select Journal & Month
+    await select_dropdown(page, "#jo-eav", entry["journal"])
+    await wait_for_spinner(page)
+    await select_dropdown(page, "#inputMoisIdEcriture", parts[1])
     
-    await asyncio.sleep(0.5)
-
-    # Step 2: Set Day & Trigger Movement Calculation
-    await eval_scope(page, """
-        scope.items.jourDocComptable = a0;
-        // This is the function Axeane calls to generate the Mvt number
-        if(scope.checkMoisCloture) scope.checkMoisCloture();
-    """, [parts[0]])
+    # 2. Type Day (Crucial for Mvt trigger)
+    await page.click("#inputJourIdEcritureAv")
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    await page.keyboard.type(parts[0], delay=100)
+    await page.keyboard.press("Tab")
     
-    await asyncio.sleep(0.8) # Wait for Axeane to generate Mvt
-
-    # Step 3: Set Piece & Libelle
-    await eval_scope(page, """
-        scope.ecritureGrouping.piece = a0;
-        scope.ecritureGrouping.libelle = a1;
-    """, [piece, libelle])
+    # 3. Wait for Mvt to appear in the field
+    await wait(page, 800)
     
-    log(f"  ✅ Header & Mvt ready: {piece}")
+    # 4. Fill Reference and Libellé
+    await page.fill("#idDocumentInputMD2", piece)
+    await page.fill("#inputLibelleIdMD2", libelle)
+    await page.keyboard.press("Tab")
+    log(f"  ✅ Header Human-Filled: {piece}")
 
 async def fill_line(page: Page, idx: int, line: dict):
-    # Setup row values via JS
-    await eval_scope(page, """
-        let row = scope.ecritureGrouping.ecritureComptables[a4];
-        if (!row) { scope.ajouterEcriture(); row = scope.ecritureGrouping.ecritureComptables[a4]; }
-        row.debit = parseFloat(a1) || 0;
-        row.credit = parseFloat(a2) || 0;
-        row.extraLibelle = a3;
-    """, [None, str(line["debit"]), str(line["credit"]), line["label"], idx])
+    # Ensure row exists
+    rows = page.locator("tr.td-row")
+    if await rows.count() <= idx:
+        await page.click(".td-cmd .fa-plus")
+        await wait(page, 300)
 
-    # Interactive Account Selection
-    selector = f"input#cc_{idx}_3"
-    try:
-        await page.wait_for_selector(selector, timeout=5000)
-        await page.click(selector)
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Backspace")
-        await page.keyboard.type(str(line["account"]), delay=70)
-        await asyncio.sleep(1.0) # Wait for dropdown
-        await page.keyboard.press("Enter")
-        await asyncio.sleep(0.3)
+    # 1. Fill Account (cc_{idx}_3)
+    acc_selector = f"#cc_{idx}_3"
+    await page.click(acc_selector)
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    await page.keyboard.type(str(line["account"]), delay=60)
+    await wait(page, 1000) # Wait for autocomplete
+    await page.keyboard.press("Enter")
+    await wait(page, 300)
+    
+    # 2. Fill Libellé
+    await page.fill(f"#exlibelle{idx}", line["label"])
+    
+    # 3. Fill Amounts
+    if float(line["debit"]) > 0:
+        await page.fill(f"#debit-eav-{idx}", str(line["debit"]))
         await page.keyboard.press("Tab")
-        await wait_for_spinner(page)
-    except:
-        log(f"    ⚠️ Account {line['account']} failed.")
+    if float(line["credit"]) > 0:
+        await page.fill(f"#credit-eav-{idx}", str(line["credit"]))
+        await page.keyboard.press("Tab")
+    
+    await wait_for_spinner(page)
 
-async def verify_and_save(page: Page, ref: str, callback) -> bool:
-    # Check the UI badges for real totals
+async def verify_and_save(page: Page, ref: str, callback):
+    # Wait for Axeane to calculate totals
+    await wait(page, 1000)
+    
     kpis = await page.evaluate("""() => {
         const s = document.querySelector('.ax-badge-kpi.ax-badge-purple .ax-badge-kpi-value');
         const d = document.querySelector('.ax-badge-kpi.ax-badge-green .ax-badge-kpi-value');
-        const mvt = document.querySelector('input[ng-model="ecritureGrouping.mvt"]');
         return { 
             solde: s ? s.textContent.trim() : "999", 
-            debit: d ? d.textContent.trim() : "0,000",
-            mvt: mvt ? mvt.value : "" 
+            debit: d ? d.textContent.trim() : "0,000" 
         };
     }""")
     
-    # Validation: Balanced AND Debit > 0 AND Mvt is NOT empty
-    is_bal = "0,000" in kpis['solde'] and kpis['debit'] != "0,000" and kpis['mvt'] != ""
-    
-    log(f"  📊 Verification -> Mvt: {kpis['mvt']} | Balanced: {is_bal}")
+    is_bal = "0,000" in kpis['solde'] and kpis['debit'] != "0,000"
+    log(f"  📊 Verifying Screen Badges -> Solde: {kpis['solde']} | Ready: {is_bal}")
     
     if callback: callback(ref, 'success' if is_bal else 'error')
     
     if is_bal:
-        await eval_scope(page, "scope.saveEcriture();")
+        await page.click("#ec-save")
         await wait_for_spinner(page)
+        # Check for error popup
+        err = await page.evaluate("""() => {
+            const m = document.querySelector('.modal.in, .swal2-popup');
+            return (m && /erreur/i.test(m.textContent)) ? m.textContent.trim() : null;
+        }""")
+        if err: log(f"  ❌ Axeane Error: {err}")
         return True
-    
-    log("  ❌ Blocked: Mvt missing or Totals are zero.")
     return False
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -176,28 +184,30 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
     async with async_playwright() as pw:
         browser = await pw.chromium.connect_over_cdp(SETTINGS.get("cdp_url"))
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
-        page = next(p for ctx in browser.contexts for p in ctx.pages if "kompta" in p.url.lower())
+        page = next(p for p in all_pages if "kompta" in p.url.lower())
         await page.bring_to_front()
         
         await do_login(page)
         await select_context(page)
         
-        # Open main menu
+        # Navigation
         await page.evaluate("""() => {
             const m = [...document.querySelectorAll('.nax-main-menu-item span')].find(s => s.textContent.includes('Comptabilité'));
             if(m) m.click();
         }""")
-        await asyncio.sleep(1)
+        await wait(page, 800)
         await page.click(".kc-dock-item[data-code='ECRITURE_AVANCEE']")
-        await page.wait_for_selector(SCOPE_ROOT_SELECTOR)
+        await wait_for_spinner(page)
 
         for i, entry in enumerate(entries):
             if stop_event and stop_event.is_set(): break
             log(f"[{i+1}/{len(entries)}] {entry['docRef']}")
             
-            await eval_scope(page, "scope.resetEcritures(); scope.unsetModele();")
-            await fill_header(page, entry)
+            # Reset Form button (top right trash icon)
+            reset_btn = page.locator("button[ng-click*='resetEcritures']").first
+            if await reset_btn.is_visible(): await reset_btn.click()
             
+            await fill_header(page, entry)
             for j, line in enumerate(entry["lines"]):
                 await fill_line(page, j, line)
             
