@@ -4,14 +4,6 @@ from data.config import SKIP_RE, ACC_ROUND, LBL_ROUND, LBL_CLIENT, LBL_TVA, LBL_
 from data.db import match_formula
 
 def parse_csv_with_mapping(mapping, raw_data, doc_type):
-    """
-    Core Parser:
-    1. Normalizes CSV data based on user column mapping.
-    2. Groups rows by Reference.
-    3. Matches client names to formulas.json rules.
-    4. Generates accounting lines (including taxes, timbre, and cash logic).
-    5. Validates balance with the strict 0.001 rule.
-    """
     normalized_rows = []
     for row in raw_data:
         norm_row = {mapping[col]: (tva_rate(val) if mapping[col] == "tva_rate" else 
@@ -19,7 +11,6 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
                     str(val).strip()) for col, val in row.items() if col in mapping}
         normalized_rows.append(norm_row)
 
-    # Group by Reference (DocRef)
     groups = {}
     for r in normalized_rows:
         ref = r.get("ref", "").strip()
@@ -29,22 +20,14 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
     entries = []
     for ref, rows in groups.items():
         first = rows[0]
-        
-        # 1. Match the rule from formulas.json
         formula = match_formula(first.get("client", ""))
         
-        # 2. Determine Entry Type
         is_av = is_avoir(first.get("operation", ""))
         ttc = abs(first.get("ttc", ZERO))
-        
-        # 3. Automation: Force Journal CA if it's a Cash Formula
         journal_to_use = "CA" if formula.get("use_cash") else "VT"
         
         lines = []
-        
-        # --- LINE GENERATION ---
-        
-        # A. MAIN CLIENT / TTC LINE
+        # 1. Main Client Line
         lines.append({
             "account": formula.get("compte_client", "411000"), 
             "label": LBL_CLIENT, 
@@ -52,52 +35,36 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
             "credit": ttc if is_av else ZERO
         })
 
-        # B. TIMBRE FISCAL (Stamp Duty - 1.000 TND)
+        # 2. Timbre
         if formula.get("use_timbre") and ttc > ZERO:
-            timbre_val = Decimal("1.000")
             lines.append({
                 "account": formula.get("compte_timbre", "437000"), 
                 "label": "TIMBRE FISCAL", 
-                "debit": timbre_val if is_av else ZERO, 
-                "credit": ZERO if is_av else timbre_val
+                "debit": Decimal("1.000") if is_av else ZERO, 
+                "credit": ZERO if is_av else Decimal("1.000")
             })
 
-        # C. HT & TVA SPLITS (Per Rate)
+        # 3. Splits
         for r in rows:
             rate = r.get("tva_rate", Decimal("19"))
-            tva_amt = abs(r.get("tva_amt", ZERO))
-            ht_amt = abs(r.get("net_ht", ZERO))
-            
-            # TVA Line
-            if tva_amt > ZERO:
-                acc_tva = formula.get("compte_tva_7") if rate < 10 else formula.get("compte_tva_19")
-                lines.append({
-                    "account": acc_tva, 
-                    "label": f"{LBL_TVA} {rate}%", 
-                    "debit": tva_amt if is_av else ZERO, 
-                    "credit": ZERO if is_av else tva_amt
-                })
-            
-            # HT Line (Revenue)
-            if ht_amt > ZERO:
-                acc_ht = formula.get("compte_ht_7") if rate < 10 else formula.get("compte_ht_19")
-                lines.append({
-                    "account": acc_ht, 
-                    "label": f"{LBL_HT_19 if rate > 10 else LBL_HT_7}", 
-                    "debit": ht_amt if is_av else ZERO, 
-                    "credit": ZERO if is_av else ht_amt
-                })
+            tva = abs(r.get("tva_amt", ZERO))
+            ht = abs(r.get("net_ht", ZERO))
+            if tva > ZERO:
+                acc = formula.get("compte_tva_7") if rate < 10 else formula.get("compte_tva_19")
+                lines.append({"account": acc, "label": f"{LBL_TVA} {rate}%", "debit": tva if is_av else ZERO, "credit": ZERO if is_av else tva})
+            if ht > ZERO:
+                acc = formula.get("compte_ht_7") if rate < 10 else formula.get("compte_ht_19")
+                lines.append({"account": acc, "label": LBL_HT_19 if rate > 10 else LBL_HT_7, "debit": ht if is_av else ZERO, "credit": ZERO if is_av else ht})
 
-        # D. CASH LOGIC (Duplication for PASSAGER)
+        # 4. Cash Rule (Extra 2 lines for PASSAGER)
         if formula.get("use_cash"):
-            # Counter-entry to close Client account
+            # Move from Client to Caisse
             lines.append({
                 "account": formula.get("compte_client", "411000"), 
                 "label": LBL_CLIENT, 
                 "debit": ttc if is_av else ZERO, 
                 "credit": ZERO if is_av else ttc
             })
-            # Entry to Caisse
             lines.append({
                 "account": formula.get("compte_caisse", "541100"), 
                 "label": LBL_CAISSE, 
@@ -105,41 +72,21 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
                 "credit": ttc if is_av else ZERO
             })
 
-        # --- FINAL VALIDATION ---
-        
+        # 5. Balance Check
         total_debit = sum(l["debit"] for l in lines)
         total_credit = sum(l["credit"] for l in lines)
         diff = total_debit - total_credit
+        is_balanced = abs(diff) < MILLIME
         
-        error = ""
-        is_balanced = False
-
-        if abs(diff) < MILLIME:
+        # Rounding Patch
+        if abs(diff) == MILLIME:
+            lines.append({"account": ACC_ROUND, "label": LBL_ROUND, "debit": MILLIME if diff < 0 else ZERO, "credit": ZERO if diff < 0 else MILLIME})
             is_balanced = True
-        elif abs(diff) == MILLIME:
-            # Automatic Rounding Patch (0.001)
-            lines.append({
-                "account": ACC_ROUND, 
-                "label": LBL_ROUND, 
-                "debit": MILLIME if diff < 0 else ZERO, 
-                "credit": ZERO if diff < 0 else MILLIME
-            })
-            is_balanced = True
-        else:
-            error = f"Unbalanced: {diff:.3f} (D:{total_debit:.3f} / C:{total_credit:.3f})"
-            if len(entries) < 3: # Log first few errors
-                log(f"⚠️ {ref} {error}")
 
         entries.append({
-            "docRef": ref,
-            "date": first.get("date", ""),
-            "journal": journal_to_use,
-            "piece": ref,
-            "libelle": (first.get("client") or ref).upper(),
-            "lines": lines,
-            "balanced": is_balanced,
-            "error_reason": error
+            "docRef": ref, "date": first.get("date", ""), "journal": journal_to_use,
+            "piece": ref, "libelle": (first.get("client") or ref).upper(), "lines": lines,
+            "balanced": is_balanced
         })
-        
     return entries
     
