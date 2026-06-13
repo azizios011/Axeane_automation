@@ -133,36 +133,41 @@ async def fill_header(page: Page, entry: dict):
     log(f"  ✅ Header Ready: {piece}")
 
 async def fill_line(page: Page, idx: int, line: dict):
-    """Fills a line and uses the '+' button to ensure the entry stays open."""
-    # 1. Check if we need to add a new row
-    # Axeane starts with 1 row by default.
+    # 1. Add row if needed
     current_rows = await page.locator("tr.td-row").count()
     if idx >= current_rows:
-        log(f"    ➕ Clicking ADD for row {idx+1}...")
         await page.locator(".td-cmd .fa-plus").first.click()
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.4)
 
-    # 2. Fill Account (cc_{idx}_3)
+    # 2. Focus and Fill Account
     acc_field = f"input#cc_{idx}_3"
-    await page.wait_for_selector(acc_field, timeout=5000)
+    await page.wait_for_selector(acc_field)
     await page.click(acc_field)
-    await page.keyboard.type(str(line["account"]), delay=50)
-    await asyncio.sleep(0.8) # Wait for search
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
+    
+    # Type slowly to trigger search
+    await page.keyboard.type(str(line["account"]), delay=70)
+    await asyncio.sleep(1.2) # Wait for dropdown to be 100% visible
+    
+    # Selection Sequence: Down then Enter
+    await page.keyboard.press("ArrowDown")
+    await asyncio.sleep(0.2)
     await page.keyboard.press("Enter")
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.4)
     
-    # 3. Fill Libelle
-    await page.fill(f"#exlibelle{idx}", line["label"])
-    
-    # 4. Fill Amounts (Skip Tab on the last field to avoid Auto-Save)
-    if float(line["debit"]) > 0:
-        await page.fill(f"#debit-eav-{idx}", str(line["debit"]))
-    if float(line["credit"]) > 0:
-        await page.fill(f"#credit-eav-{idx}", str(line["credit"]))
-    
-    # Force Angular to process the numbers without using Tab
-    await page.evaluate(f"angular.element(document.getElementById('debit-eav-{idx}')).triggerHandler('change')")
-    await wait_for_spinner(page)
+    # 3. Fill Amounts & Label via JS (Fast and avoids early saving)
+    await page.evaluate(f"""([i, lbl, d, c]) => {{
+        const root = document.querySelector('.td-root');
+        const scope = angular.element(root).scope();
+        const row = scope.ecritureGrouping.ecritureComptables[i];
+        row.extraLibelle = lbl;
+        row.debit = parseFloat(d) || 0;
+        row.credit = parseFloat(c) || 0;
+        if(scope.calculateTotalDebit) scope.calculateTotalDebit(true, row, false);
+        if(scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
+        scope.$apply();
+    }}""", [idx, line["label"], str(line["debit"]), str(line["credit"])])
     
 async def verify_and_save(page: Page, ref: str, callback):
     await wait(page, 1500)
