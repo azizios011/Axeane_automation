@@ -22,16 +22,11 @@ CREATE TABLE IF NOT EXISTS formulas (
 );
 """
 
-HARD_FALLBACK = {
-    "id": None, "name": "Fallback", "client_match": "", "is_default": 1,
-    "compte_client": "411000", "compte_tva_19": "436719", "compte_ht_19": "707019",
-    "use_timbre": 1, "compte_timbre": "437000", "use_7_percent": 0,
-    "compte_tva_7": "436707", "compte_ht_7": "707019", "use_cash": 0, "compte_caisse": "541100",
-}
-
 def get_connection():
-    conn = sqlite3.connect(DB_FILE); conn.row_factory = sqlite3.Row
-    conn.execute(SCHEMA); return conn
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    conn.execute(SCHEMA)
+    return conn
 
 def list_formulas():
     with get_connection() as conn:
@@ -40,13 +35,46 @@ def list_formulas():
 def get_default_formula():
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM formulas WHERE is_default=1 LIMIT 1").fetchone()
-        return dict(row) if row else HARD_FALLBACK.copy()
+        if row: return dict(row)
+        # Fallback if no default marked
+        row = conn.execute("SELECT * FROM formulas LIMIT 1").fetchone()
+        return dict(row) if row else {}
 
 def match_formula(client_name: str):
     name_only = (client_name or "").upper().split("|")[-1].strip()
     formulas = list_formulas()
     for f in formulas:
         cm = (f.get("client_match") or "").strip().upper()
-        if cm and (cm == name_only or cm in (client_name or "").upper()): return f
+        if cm and (cm == name_only or cm in (client_name or "").upper()):
+            return f
     return get_default_formula()
-    
+
+def delete_formula(f_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM formulas WHERE id=?", (f_id,))
+
+def save_formula(formula: dict) -> int:
+    """Insert or update a formula. Handles the 'Default' toggle safely."""
+    fields = [
+        "name", "client_match", "is_default", "compte_client", "compte_tva_19",
+        "compte_ht_19", "use_timbre", "compte_timbre", "use_7_percent",
+        "compte_tva_7", "compte_ht_7", "use_cash", "compte_caisse",
+    ]
+    values = [formula.get(f, "") for f in fields]
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        if formula.get("is_default"):
+            cursor.execute("UPDATE formulas SET is_default = 0")
+
+        if formula.get("id"):
+            placeholders = ", ".join([f"{f}=?" for f in fields])
+            cursor.execute(f"UPDATE formulas SET {placeholders} WHERE id=?", (*values, formula["id"]))
+            new_id = formula["id"]
+        else:
+            qs = ", ".join(["?"] * len(fields))
+            cursor.execute(f"INSERT INTO formulas ({', '.join(fields)}) VALUES ({qs})", values)
+            new_id = cursor.lastrowid
+        conn.commit()
+        return new_id
+        
