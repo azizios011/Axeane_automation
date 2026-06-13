@@ -5,7 +5,6 @@ from functions.helpers import log
 
 SCOPE_ROOT_SELECTOR = ".td-root"
 
-
 # ─────────────────────────────────────────────────────────────────────────
 # Generic helpers
 # ─────────────────────────────────────────────────────────────────────────
@@ -14,10 +13,9 @@ async def wait(page: Page, ms: int = None) -> None:
     delay = ms if ms is not None else SETTINGS.get("slow_mo", 300)
     await page.wait_for_timeout(delay)
 
-
 async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
     try:
-        await wait(page, 300)
+        await wait(page, 400)
         await page.wait_for_function(
             """() => {
                 const spinners = document.querySelectorAll('.nx-modern-spinner-modal, .modal.in, [uib-modal-window], .loading-spinner');
@@ -28,60 +26,49 @@ async def wait_for_spinner(page: Page, timeout: int = 60000) -> None:
             }""",
             timeout=timeout,
         )
-        await wait(page, 300)
+        await wait(page, 400)
     except PWTimeout:
         log("  ⚠️ Spinner timeout, proceeding anyway")
 
-
 async def eval_scope(page: Page, body: str, args: list = None) -> dict:
-    """
-    JS-Hook core: resolves the EcritureMainControllerModel2 $scope from
-    `.td-root` and runs `body` as the body of function(scope, a0, a1, ...).
-    Auto $apply()s if a digest isn't already running.
+    # Ensure args is always 5 elements to match the JS signature [a0, a1, a2, a3, a4]
+    if args is None: args = []
+    while len(args) < 5: args.append(None)
 
-    Returns {"ok": bool, "result": ..., "error": ...}
-    """
-    arg_names = ["a0", "a1", "a2", "a3", "a4"]
-    n_args = len(args) if args else 0
-    fn_args = ", ".join(arg_names[:n_args])
-
-    js = f"""([{fn_args}]) => {{
+    js = f"""(args) => {{
+        const [a0, a1, a2, a3, a4] = args;
         const root = document.querySelector('{SCOPE_ROOT_SELECTOR}');
         if (!root) return {{ ok: false, error: 'root-not-found' }};
         const scope = angular.element(root).scope();
         if (!scope) return {{ ok: false, error: 'scope-not-found' }};
+        
         let result;
         try {{
-            result = (function(scope, {fn_args}) {{
+            result = (function(scope, a0, a1, a2, a3, a4) {{
                 {body}
-            }})(scope, {fn_args});
+            }})(scope, a0, a1, a2, a3, a4);
         }} catch (e) {{
-            return {{ ok: false, error: String(e) }};
+            return {{ ok: false, error: e.message, stack: e.stack }};
         }}
+        
         if (!scope.$root.$$phase) scope.$apply();
         return {{ ok: true, result: result }};
     }}"""
 
-    return await page.evaluate(js, args or [])
+    return await page.evaluate(js, args)
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Navigation & Login
+# ─────────────────────────────────────────────────────────────────────────
 
 async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
-    """
-    DOM-click based dropdown select — used ONLY for sidebar/login widgets
-    (Entreprise/Exercice selector) that live outside EcritureMainControllerModel2,
-    where eval_scope's .td-root lookup doesn't apply.
-    """
-    log(f"    Searching for '{option_text}' in dropdown #{ol_id}...")
-
     success = await page.evaluate("""([olId, text]) => {
         const ol = document.getElementById(olId);
         if (!ol) return false;
-
         const options = ol.querySelectorAll('li.nya-bs-option a');
         for (const a of options) {
-            const itemText = a.textContent.trim().toLowerCase();
-            const targetText = text.trim().toLowerCase();
-            if (itemText.includes(targetText)) {
+            if (a.textContent.trim().toLowerCase().includes(text.toLowerCase().trim())) {
                 a.click();
                 const scope = angular.element(ol).scope();
                 if (scope && !scope.$root.$$phase) scope.$apply();
@@ -90,11 +77,45 @@ async def nya_select_by_js(page: Page, ol_id: str, option_text: str) -> None:
         }
         return false;
     }""", [ol_id, option_text])
-
-    if not success:
-        log(f"    ⚠️ WARNING: Could not find '{option_text}' in #{ol_id}")
     await wait(page, 500)
 
+async def do_login(page: Page) -> None:
+    if await page.locator("#loginInput").count() == 0: return
+    log(f"Logging in as {SETTINGS.get('axeane_user')}...")
+    await page.locator("#loginInput").fill(SETTINGS.get("axeane_user"))
+    await page.locator("#passwordInput").fill(SETTINGS.get("axeane_password"))
+    await page.locator("button[aria-label='Connexion']").click()
+    await page.wait_for_selector(".nax-side-bar-menu", timeout=30000)
+
+async def select_context(page: Page) -> None:
+    entreprise = SETTINGS.get("axeane_entreprise", "CPR")
+    exercice = SETTINGS.get("axeane_exercice", "EX 2026")
+    log(f"Selecting context: {entreprise} / {exercice}")
+    
+    # Open sidebar if closed
+    if not await page.evaluate("$('.nax-side-bar-menu').hasClass('nax-side-bar-menu-active')"):
+        await page.evaluate("document.getElementById('menuBtn').click()")
+        await wait(page, 800)
+
+    await nya_select_by_js(page, "entreprise", entreprise)
+    await wait(page, 800)
+    await nya_select_by_js(page, "exercice", exercice)
+    await wait(page, 800)
+
+async def navigate_to_saisie(page: Page) -> None:
+    log("Navigating to Saisie des écritures...")
+    await page.evaluate("""() => {
+        const items = document.querySelectorAll('.nax-main-menu-item span.ng-binding');
+        for (const item of items) {
+            if (item.textContent.trim() === 'Comptabilité générale') {
+                item.closest('.nax-main-menu-item').click();
+                return true;
+            }
+        }
+    }""")
+    await wait(page, 1000)
+    await page.evaluate("document.querySelector(\".kc-dock-item[data-code='ECRITURE_AVANCEE']\").click()")
+    await page.wait_for_selector(SCOPE_ROOT_SELECTOR, timeout=15000)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Login / navigation (restored from pre-JS-hook version)
@@ -242,24 +263,14 @@ async def close_blocking_modals(page: Page):
 # JS-Hook form filling (EcritureMainControllerModel2 $scope)
 # ─────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────
+# Entry Logic
+# ─────────────────────────────────────────────────────────────────────────
+
 async def reset_form(page: Page) -> None:
-    """JS-Hook: Wipes the Angular Model clean, plus closes any leftover modals."""
-    log("  🧹 Resetting form for next entry...")
+    log("  🧹 Resetting form...")
+    await eval_scope(page, "scope.resetEcritures(); scope.unsetModele();")
     await wait_for_spinner(page)
-    await close_blocking_modals(page)
-
-    res = await eval_scope(page, """
-        if (scope.resetEcritures) scope.resetEcritures();
-        if (scope.unsetModele) scope.unsetModele();
-        return true;
-    """)
-    if not res.get("ok"):
-        log(f"    ⚠️ JS: reset_form error: {res.get('error')}")
-
-    await page.keyboard.press("Escape")
-    await wait_for_spinner(page)
-    log("  ✅ Form ready.")
-
 
 async def select_journal(page: Page, journal_code: str) -> bool:
     """JS-Hook: Picks the journal object from the model and runs its ng-change side effects."""
@@ -305,96 +316,54 @@ async def select_devise(page: Page, devise_code: str) -> bool:
 
 
 async def fill_header(page: Page, entry: dict) -> None:
-    """JS-Hook: Injects Journal, Devise, Jour, Mois, Ref and Libelle directly into the Angular model."""
-    await wait_for_spinner(page)
-
-    await select_journal(page, entry["journal"])
-    if entry.get("devise"):
-        await select_devise(page, entry["devise"])
-
     parts = entry["date"].split("/")
-    jour = parts[0]
-    month_idx = int(parts[1])  # 01=Jan in CSV -> moisList[0]
-
-    piece = entry.get("piece", entry.get("docRef", ""))
-    libelle = entry.get("libelle", entry.get("docRef", ""))
-
+    # Injects: Journal, Day, Month, Piece, Libelle
     res = await eval_scope(page, """
-        scope.items.jourDocComptable = a0;
-        scope.items.selectedMoisDocComptable = scope.moisList[a1 - 1];
-        scope.ecritureGrouping.piece = a2;
-        scope.ecritureGrouping.libelle = a3;
-
-        if (scope.checkMoisCloture) scope.checkMoisCloture();
-        if (scope.deviseCodeChanges) scope.deviseCodeChanges(scope.ecritureGrouping.deviseObj);
-        if (scope.calculateTotalCredit) scope.calculateTotalCredit(true, null);
-        if (scope.calculateTotalDebit) scope.calculateTotalDebit(true, null);
-        if (scope.updateLibelleEc) scope.updateLibelleEc();
+        const entId = scope.contextComptable.currentEntreprise.entrepriseId;
+        const jour = scope.mapCodeJournauxEntreprise[entId].find(j => j.code === a0);
+        if (jour) {
+            scope.ecritureGrouping.journal = jour;
+            scope.JournalCodeChanges();
+        }
+        scope.items.jourDocComptable = a1;
+        scope.items.selectedMoisDocComptable = scope.moisList[parseInt(a2) - 1];
+        scope.ecritureGrouping.piece = a3;
+        scope.ecritureGrouping.libelle = a4;
         return true;
-    """, [jour, month_idx, piece, libelle])
-
-    if not res.get("ok"):
-        log(f"    ⚠️ JS: Header injection error: {res.get('error')}")
-
-    log(f"  ✅ JS: Header Injected ({jour} / {month_idx})")
+    """, [entry["journal"], parts[0], parts[1], entry["piece"], entry["libelle"]])
+    log(f"  ✅ JS: Header Injected ({parts[0]}/{parts[1]})")
     await wait_for_spinner(page)
-
 
 async def fill_line(page: Page, idx: int, line: dict) -> None:
-    """JS-Hook: Adds a row and populates compte/libelle/debit/credit via the model + scope handlers."""
-
-    add_res = await eval_scope(page, """
-        scope.ajouterEcriture();
-        return scope.ecritureGrouping.ecritureComptables.length - 1;
-    """)
-    if not add_res.get("ok"):
-        log(f"    ⚠️ JS: Could not add row: {add_res.get('error')}")
-        return
-    row_index = add_res["result"]
-
+    # Arguments: Account, Debit, Credit, Label, Index
     res = await eval_scope(page, """
-        const entrepriseId = scope.contextComptable.currentEntreprise.entrepriseId;
-        const comptes = (scope.model && scope.model.mapComptesComptableEntreprise[entrepriseId]) || [];
-        const needle = String(a1).trim().toUpperCase();
+        scope.ajouterEcriture();
+        const row = scope.ecritureGrouping.ecritureComptables[scope.ecritureGrouping.ecritureComptables.length - 1];
+        
+        row.debit = parseFloat(a1) || 0;
+        row.credit = parseFloat(a2) || 0;
+        row.extraLibelle = a3;
 
-        const match = comptes.find(c => {
-            const code = String(c.compteComptable || c.numCompte || c.code || '').trim().toUpperCase();
-            const lib = String(c.dernierCompteLibelle || '').trim().toUpperCase();
-            return code === needle || code.startsWith(needle) || lib.startsWith(needle);
-        });
+        // Smart Account Matcher
+        const entId = scope.contextComptable.currentEntreprise.entrepriseId;
+        const list = scope.model.mapComptesComptableEntreprise[entId] || [];
+        const match = list.find(c => (c.compteComptable || c.numCompte || '').startsWith(a0));
 
-        const row = scope.ecritureGrouping.ecritureComptables[a0];
-        if (!row) return { found: false, reason: 'row-missing' };
-
-        row.extraLibelle = a2;
-        row.debit = a3;
-        row.credit = a4;
-
-        if (!match) return { found: false, reason: 'account-not-found' };
-
-        if (scope.onSelectCompteComptable) {
-            scope.onSelectCompteComptable(match, match.dernierCompteLibelle, null, a0, row);
-        } else {
-            row.comptesComptable = match;
+        if (match && scope.onSelectCompteComptable) {
+            // Replicate exactly what Axeane does when you click an account
+            scope.onSelectCompteComptable(match, match.dernierCompteLibelle || match.libelle, null, 0, row);
+            if (scope.noNeedTreasuryOperation) scope.noNeedTreasuryOperation(row, 0);
+            if (scope.calculateTotalDebit) scope.calculateTotalDebit(true, row, false);
+            if (scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
+            return { found: true, code: a0 };
         }
-        if (scope.noNeedTreasuryOperation) scope.noNeedTreasuryOperation(row, a0);
-
-        if (scope.calculateTotalDebit) scope.calculateTotalDebit(true, row, false);
-        if (scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
-        if (scope.calculTauxTax) scope.calculTauxTax(row);
-
-        return { found: true };
-    """, [row_index, line["account"], line["label"], str(line["debit"]), str(line["credit"])])
+        return { found: false, code: a0 };
+    """, [line["account"], str(line["debit"]), str(line["credit"]), line["label"]])
 
     if not res.get("ok"):
-        log(f"    ⚠️ JS: fill_line error: {res.get('error')}")
-        return
-
-    if not res["result"].get("found"):
-        log(f"    ⚠️ JS: Compte '{line['account']}' not found in mapComptesComptableEntreprise — left as text only")
-
-    await wait_for_spinner(page)
-
+        log(f"    ❌ JS Error in line {idx}: {res.get('error')}")
+    elif not res.get("result", {}).get("found"):
+        log(f"    ⚠️ Compte {line['account']} not found in Axeane list")
 
 async def cleanup_extra_rows(page: Page, needed: int) -> None:
     """JS-Hook: trims ecritureComptables down to `needed` rows (safety net)."""
@@ -412,68 +381,30 @@ async def cleanup_extra_rows(page: Page, needed: int) -> None:
     if res.get("ok") and res.get("result"):
         log(f"  🗑️ Trimmed {res['result']} leftover row(s)")
 
-
 async def verify_entry(page: Page, entry: dict, update_ui_callback):
-    """JS-Hook: Sums débit/crédit straight from the ecritureComptables model."""
-    ref = entry['docRef']
-    if update_ui_callback:
-        update_ui_callback(ref, 'processing')
-
     res = await eval_scope(page, """
-        const lines = scope.ecritureGrouping.ecritureComptables || [];
-        let debit = 0, credit = 0;
-        for (const l of lines) {
-            debit += parseFloat(String(l.debit || '0').replace(',', '.')) || 0;
-            credit += parseFloat(String(l.credit || '0').replace(',', '.')) || 0;
-        }
-        return { debit, credit, count: lines.length };
+        return {
+            debit: scope.ecritureGrouping.totalDebit || 0,
+            credit: scope.ecritureGrouping.totalCredit || 0,
+            solde: scope.ecritureGrouping.solde || 0
+        };
     """)
-
-    if not res.get("ok"):
-        log(f"  ⚠️ JS: verify_entry error: {res.get('error')}")
-        if update_ui_callback:
-            update_ui_callback(ref, 'error')
-        return False
-
-    totals = res["result"]
-    is_balanced = abs(totals["debit"] - totals["credit"]) < 0.001 and totals["debit"] > 0
-    log(f"  📊 Verification -> Débit: {totals['debit']:.3f} | Crédit: {totals['credit']:.3f} | Balanced: {is_balanced}")
-
+    data = res.get("result", {"debit": 0, "credit": 0, "solde": 999})
+    is_balanced = abs(data["solde"]) < 0.001
+    log(f"  📊 Totals -> D: {data['debit']:.3f} | C: {data['credit']:.3f} | Solde: {data['solde']:.3f}")
+    
     if update_ui_callback:
-        update_ui_callback(ref, 'success' if is_balanced else 'error')
+        update_ui_callback(entry['docRef'], 'success' if is_balanced else 'error')
     return is_balanced
 
-
 async def save_entry(page: Page) -> str | None:
-    """JS-Hook: Calls saveEcriture() on the scope directly instead of clicking the button."""
     await wait_for_spinner(page)
-
-    res = await eval_scope(page, """
-        if (scope.disabledSaveEcriture) return { saved: false, reason: 'disabled' };
-        if (!scope.saveEcriture) return { saved: false, reason: 'no-save-fn' };
-        scope.saveEcriture();
-        return { saved: true };
-    """)
-
-    if not res.get("ok") or not res["result"].get("saved"):
-        reason = res.get("error") or res.get("result", {}).get("reason")
-        log(f"  ⚠️ JS: saveEcriture() not triggered ({reason})")
-        return f"save-not-triggered:{reason}"
-
+    res = await eval_scope(page, "if(scope.saveEcriture) scope.saveEcriture(); return true;")
     await wait(page, 1500)
-    await wait_for_spinner(page)
-
+    # Check for Axeane error modals
     return await page.evaluate("""() => {
-        const candidates = document.querySelectorAll('.modal, .ax-modal, [role="alertdialog"], .swal2-popup');
-        for (const el of candidates) {
-            if (el.offsetParent === null) continue;
-            const text = el.textContent || '';
-            if (/erreur/i.test(text)) {
-                const closeBtn = el.querySelector('.close, button[aria-label="Close"], .swal2-confirm, .swal2-close');
-                if (closeBtn) closeBtn.click();
-                return text.trim().replace(/\\s+/g, ' ');
-            }
-        }
+        const modal = document.querySelector('.modal.in, .swal2-popup');
+        if (modal && /erreur/i.test(modal.textContent)) return modal.textContent.trim();
         return null;
     }""")
 
@@ -483,64 +414,29 @@ async def save_entry(page: Page) -> str | None:
 # ─────────────────────────────────────────────────────────────────────────
 
 async def run(entries: list[dict], update_ui_callback=None, stop_event=None, browser_log_callback=None) -> None:
-    cdp_url = SETTINGS.get("cdp_url", "http://localhost:9222")
     async with async_playwright() as pw:
-        log(f"Connecting to CDP at {cdp_url}...")
-        browser = await pw.chromium.connect_over_cdp(cdp_url)
-
+        browser = await pw.chromium.connect_over_cdp(SETTINGS.get("cdp_url"))
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
-        page: Page = next(
-            (p for p in all_pages if "axeane" in p.url.lower() or "kompta" in p.url.lower()),
-            all_pages[0] if all_pages else None,
-        )
-        if page is None:
-            raise RuntimeError("No page found. Is Axeane Kompta open?")
-
-        if browser_log_callback:
-            page.on("console", lambda msg: browser_log_callback(f"🌐 BROWSER: {msg.text}") if msg.type == "error" else None)
-            page.on("pageerror", lambda exc: browser_log_callback(f"💥 PAGE CRASH: {exc}"))
-
-        log(f"Connected to: {page.url}")
+        page = next((p for p in all_pages if "kompta" in p.url.lower()), all_pages[0])
         await page.bring_to_front()
 
-        # ── Initial setup navigation ────────────────────────────────────
         await do_login(page)
         await select_context(page)
-        ent, exe = await get_current_context(page)
-        log(f"Context: {ent} / {exe}")
         await navigate_to_saisie(page)
 
-        total = len(entries)
         for i, entry in enumerate(entries):
-            if stop_event and stop_event.is_set():
-                log("🛑 Automation stopped by user.")
-                break
-
-            if not entry.get("balanced", True):
-                log(f"SKIP {entry['docRef']} — not balanced locally ({entry.get('error_reason')})")
-                if update_ui_callback:
-                    update_ui_callback(entry['docRef'], 'error')
-                continue
-
-            log(f"[{i+1}/{total}] {entry['docRef']} — {len(entry['lines'])} lines")
-
+            if stop_event and stop_event.is_set(): break
+            log(f"[{i+1}/{len(entries)}] {entry['docRef']}")
+            
             await reset_form(page)
             await fill_header(page, entry)
-
+            
             for j, line in enumerate(entry["lines"]):
-                log(f"  line {j}: {line['account']} D:{line['debit']} C:{line['credit']}")
                 await fill_line(page, j, line)
-
-            await cleanup_extra_rows(page, len(entry["lines"]))
 
             if await verify_entry(page, entry, update_ui_callback):
                 err = await save_entry(page)
-                if err:
-                    log(f"  ❌ Axeane rejected save for {entry['docRef']}: {err}")
-                    if update_ui_callback:
-                        update_ui_callback(entry['docRef'], 'error')
+                if err: log(f"  ❌ Save Error: {err}")
             else:
-                log(f"  ❌ SKIPPING SAVE: Entry {entry['docRef']} is not balanced in Axeane UI!")
-
-        log("Done — all entries processed.")
-        
+                log(f"  ❌ Skipping Save (Unbalanced)")
+                
