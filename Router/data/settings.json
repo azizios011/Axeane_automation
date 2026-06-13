@@ -1,0 +1,8 @@
+{
+    "cdp_url": "http://localhost:9222",
+    "axeane_user": "RIHAB1",
+    "axeane_password": "RIHAB@rihab2024",
+    "axeane_entreprise": "CPR",
+    "axeane_exercice": "EX 2026",
+    "slow_mo": 300
+}

@@ -3,7 +3,5 @@ venv/
 __pycache__/
 *.pyc
 cdp_user_data/
-Router/data/settings.json
 Router/data/user_mappings.json
-Router/data/formulas.json
 Router/data/journal vte mars 26(Sheet1)(1).csv
