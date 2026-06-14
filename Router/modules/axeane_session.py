@@ -156,18 +156,48 @@ async def fill_line(page: Page, idx: int, line: dict):
     await page.keyboard.press("Enter")
     await asyncio.sleep(0.4)
     
-    # 3. Fill Amounts & Label via JS (Fast and avoids early saving)
-    await page.evaluate(f"""([i, lbl, d, c]) => {{
+    # 3. Fill Label & Amounts
+    # First write label via scope (no DOM input for extraLibelle)
+    await page.evaluate("""([i, lbl]) => {
         const root = document.querySelector('.td-root');
         const scope = angular.element(root).scope();
         const row = scope.ecritureGrouping.ecritureComptables[i];
-        row.extraLibelle = lbl;
-        row.debit = parseFloat(d) || 0;
-        row.credit = parseFloat(c) || 0;
-        if(scope.calculateTotalDebit) scope.calculateTotalDebit(true, row, false);
-        if(scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
-        scope.$apply();
-    }}""", [idx, line["label"], str(line["debit"]), str(line["credit"])])
+        if (row) { row.extraLibelle = lbl; scope.$apply(); }
+    }""", [idx, line["label"]])
+
+    # Then fill debit/credit via the actual DOM inputs so Angular ng-model picks up the value.
+    # The form reads from input fields on save — scope.$apply() alone does not update them.
+    debit_str  = str(line["debit"])
+    credit_str = str(line["credit"])
+
+    await page.evaluate("""([i, d, c]) => {
+        function setInput(el, val) {
+            if (!el) return;
+            // Native input setter bypasses Angular's value caching
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            nativeInputValueSetter.call(el, val);
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const debitEl  = document.querySelector(`input#dc_${i}_6`);
+        const creditEl = document.querySelector(`input#dc_${i}_7`);
+        setInput(debitEl,  d);
+        setInput(creditEl, c);
+
+        // Also update scope directly as a safety net
+        const root  = document.querySelector('.td-root');
+        const scope = angular.element(root).scope();
+        const row   = scope.ecritureGrouping.ecritureComptables[i];
+        if (row) {
+            row.debit  = parseFloat(d)  || 0;
+            row.credit = parseFloat(c) || 0;
+            if (scope.calculateTotalDebit)  scope.calculateTotalDebit(true, row, false);
+            if (scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
+            scope.$apply();
+        }
+    }""", [idx, debit_str, credit_str])
 
 async def verify_and_save(page: Page, ref: str, callback):
     await wait(page, 1500)
