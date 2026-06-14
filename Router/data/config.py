@@ -50,7 +50,7 @@ LBL_ROUND = "AJUST ARRONDI"
 DEFAULT_DEVISE = "TND"
 
 # ── Regex & Constants ────────────────────────────────────────────────────────
-CASH_RE = re.compile(r"passager|comptant|caisse|fj pass", re.I)
+CASH_RE = re.compile(r"passager|caisse|fj pass", re.I)
 SKIP_RE = re.compile(r"total\s+pour|grand\s+total", re.I)
 MONTH_FR = [
     "", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",

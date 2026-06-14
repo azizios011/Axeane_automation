@@ -22,10 +22,6 @@ def tva_rate(rate_str: str) -> Decimal:
     m = re.search(r"[\d.]+", str(rate_str))
     return Decimal(m.group()) if m else Decimal("19")
 
-def is_cash(client: str) -> bool:
-    # Removed 'comptant' from the list
-    return bool(re.compile(r"passager|caisse|fj pass", re.I).search(client))
-
 def is_avoir(op: str) -> bool:
     return "avoir" in op.lower()
     

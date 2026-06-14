@@ -35,8 +35,8 @@ class MainWindow:
         self.notebook.select(2)
 
     def _on_browser_log(self, message: str):
-        # Add the message to the log in Tab 3
-        self.csv_table_tab.add_log_message(message, prefix="⚠️") 
+        # Route browser debug messages to the console in Tab 1
+        self.pwa_tab._log_safe(f"⚠️ {message}")
 
     def _on_process(self, mapping: dict, data: list[dict], doc_type: str):
         if not self.pwa_tab.is_verified:

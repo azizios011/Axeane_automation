@@ -37,11 +37,12 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
 
         # 2. Timbre
         if formula.get("use_timbre") and ttc > ZERO:
+            timbre_amt = dec(formula.get("timbre_amount", "1.000"))
             lines.append({
                 "account": formula.get("compte_timbre", "437000"), 
                 "label": "TIMBRE FISCAL", 
-                "debit": Decimal("1.000") if is_av else ZERO, 
-                "credit": ZERO if is_av else Decimal("1.000")
+                "debit": timbre_amt if is_av else ZERO, 
+                "credit": ZERO if is_av else timbre_amt
             })
 
         # 3. Splits

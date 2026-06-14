@@ -3,12 +3,24 @@ from pathlib import Path
 
 FORMULAS_FILE = Path(__file__).parent / "formulas.json"
 
+_formula_cache: list | None = None
+
 def list_formulas():
-    if not FORMULAS_FILE.exists(): return []
-    try:
-        with open(FORMULAS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except: return []
+    global _formula_cache
+    if _formula_cache is None:
+        if not FORMULAS_FILE.exists():
+            _formula_cache = []
+        else:
+            try:
+                with open(FORMULAS_FILE, "r", encoding="utf-8") as f:
+                    _formula_cache = json.load(f)
+            except:
+                _formula_cache = []
+    return _formula_cache
+
+def _invalidate_cache():
+    global _formula_cache
+    _formula_cache = None
 
 def get_default_formula():
     formulas = list_formulas()
@@ -34,5 +46,9 @@ def match_formula(client_name: str):
     return get_default_formula()
 
 # Dummies for UI compatibility
-def save_formula(f): pass
-def delete_formula(id): pass
+def save_formula(f):
+    _invalidate_cache()
+
+def delete_formula(id):
+    _invalidate_cache()
+    

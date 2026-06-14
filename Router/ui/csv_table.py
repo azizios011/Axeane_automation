@@ -92,6 +92,7 @@ class CsvTableTab(ttk.Frame):
 
     def _build_table_ui(self):
         self.tree.delete(*self.tree.get_children())
+        self._ref_index: dict[str, str] = {}  # ref → tree item_id
         
         self.display_headers = [disp_name for disp_name, csv_col in DISPLAY_COLUMNS.items() if csv_col in self.headers]
         
@@ -103,9 +104,16 @@ class CsvTableTab(ttk.Frame):
             width = 180 if col in ["Client", "Operation"] else 100
             self.tree.column(col, width=width, anchor=tk.W)
 
+        # Ref column index (3rd display column, index 2)
+        ref_col_idx = 2
+
         for row in self.csv_data:
             values = [row.get(DISPLAY_COLUMNS[col], "") for col in self.display_headers]
-            self.tree.insert("", tk.END, values=values)
+            item_id = self.tree.insert("", tk.END, values=values)
+            if len(values) > ref_col_idx:
+                ref_val = values[ref_col_idx]
+                if ref_val:
+                    self._ref_index[ref_val] = item_id
 
         self.info_label.config(text=f"Loaded: {self.current_doc_type} ({len(self.csv_data)} total rows)")
 
@@ -145,13 +153,10 @@ class CsvTableTab(ttk.Frame):
             }
             tag = f"status_{ref.replace('/', '_')}"
             self.tree.tag_configure(tag, background=color_map.get(status, '#FFFFFF'))
-            
-            for item in self.tree.get_children():
-                values = self.tree.item(item, 'values')
-                # Ref is the 3rd column (index 2)
-                if len(values) > 2 and values[2] == ref:
-                    self.tree.item(item, tags=(tag,))
-                    self.tree.see(item) # Auto-scroll to the active row
-                    break
+
+            item_id = getattr(self, '_ref_index', {}).get(ref)
+            if item_id:
+                self.tree.item(item_id, tags=(tag,))
+                self.tree.see(item_id)
         self.after(0, _update) # Thread-safe UI update
         
