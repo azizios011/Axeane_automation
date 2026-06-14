@@ -139,8 +139,8 @@ async def fill_line(page: Page, idx: int, line: dict):
     await page.keyboard.press("Enter")
     await asyncio.sleep(0.5)
 
-    # 3. After account selection, the cursor lands on the Libelle field.
-    #    It is pre-filled with the header libelle — clear it before typing.
+    # 3. After account selection, cursor lands on Libelle.
+    #    Clear the pre-filled header libelle, then type our label.
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
     await page.keyboard.type(line["label"], delay=40)
@@ -157,8 +157,14 @@ async def fill_line(page: Page, idx: int, line: dict):
 
     if credit_val != 0:
         await page.keyboard.type(f"{credit_val:.3f}", delay=50)
-    await page.keyboard.press("Tab")   # Credit → next row / commit
-    await asyncio.sleep(0.2)
+
+    # DO NOT press Tab after credit — Axeane auto-submits when the form
+    # is balanced. Instead, click the "Ajouter écriture" button (ajouterEcriture),
+    # which is the .td-cmd button with fa-plus (NOT the green .td-ai row-header button).
+    # This commits the credit value and adds a blank row safely.
+    await asyncio.sleep(0.3)
+    await page.locator(".td-cmd .fa-plus").first.click()
+    await asyncio.sleep(0.4)
 
     log(f"    Row {idx+1}: {line['account']} | {line['label']} | D:{debit_val:.3f} C:{credit_val:.3f}")
 
