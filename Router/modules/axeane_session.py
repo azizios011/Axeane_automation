@@ -61,6 +61,17 @@ async def select_nya_bs(page: Page, container_id: str, text: str):
         log(f"    ⚠️ Error filling {container_id}: {str(e)}")
 
 # ─────────────────────────────────────────────────────────────────────────
+# Debug: color a form row by its 0-based index
+# ─────────────────────────────────────────────────────────────────────────
+
+async def color_row(page: Page, idx: int, color: str):
+    """Paint a table row in the saisie form for visual debugging."""
+    await page.evaluate("""([i, c]) => {
+        const rows = document.querySelectorAll('tr.td-row');
+        if (rows[i]) rows[i].style.backgroundColor = c;
+    }""", [idx, color])
+
+# ─────────────────────────────────────────────────────────────────────────
 # Navigation & Login
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -119,14 +130,25 @@ async def fill_header(page: Page, entry: dict):
     log(f"  ✅ Header Ready: {piece}")
 
 
-async def fill_line(page: Page, idx: int, line: dict):
-    # 1. Add row if needed
+async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
+    """
+    Fill one accounting line.
+
+    is_last=True  → this is the final row; do NOT click add-button after it
+                    (an empty trailing row would block Axeane from saving).
+    is_last=False → click the add-button after filling to open the next row
+                    without triggering Axeane's auto-submit on a balanced form.
+    """
+    # 1. Add row if the form doesn't have enough rows yet
     current_rows = await page.locator("tr.td-row").count()
     if idx >= current_rows:
         await page.locator(".td-cmd .fa-plus").first.click()
         await asyncio.sleep(0.5)
 
-    # 2. Fill Account — click the account input for this row and type to search
+    # 2. Debug: highlight the row we're about to fill (orange = in progress)
+    await color_row(page, idx, "#FFF3CD")
+
+    # 3. Fill Account
     acc_field = f"input#cc_{idx}_3"
     await page.wait_for_selector(acc_field, timeout=8000)
     await page.click(acc_field)
@@ -139,8 +161,8 @@ async def fill_line(page: Page, idx: int, line: dict):
     await page.keyboard.press("Enter")
     await asyncio.sleep(0.5)
 
-    # 3. After account selection, cursor lands on Libelle.
-    #    Clear the pre-filled header libelle, then type our label.
+    # 4. Fill Libelle — cursor lands here after account selection.
+    #    The field is pre-filled with the header libelle; clear it first.
     await page.keyboard.press("Control+A")
     await page.keyboard.press("Backspace")
     await page.keyboard.type(line["label"], delay=40)
@@ -150,23 +172,34 @@ async def fill_line(page: Page, idx: int, line: dict):
     debit_val  = float(line["debit"])
     credit_val = float(line["credit"])
 
+    # 5. Fill Debit
     if debit_val != 0:
         await page.keyboard.type(f"{debit_val:.3f}", delay=50)
     await page.keyboard.press("Tab")   # Debit → Credit
     await asyncio.sleep(0.2)
 
+    # 6. Fill Credit
     if credit_val != 0:
         await page.keyboard.type(f"{credit_val:.3f}", delay=50)
 
-    # DO NOT press Tab after credit — Axeane auto-submits when the form
-    # is balanced. Instead, click the "Ajouter écriture" button (ajouterEcriture),
-    # which is the .td-cmd button with fa-plus (NOT the green .td-ai row-header button).
-    # This commits the credit value and adds a blank row safely.
+    # 7. Commit strategy:
+    #    - NOT last row → click add-button (commits credit, opens next blank row
+    #      without triggering Axeane's balanced-form auto-submit via Tab).
+    #    - Last row     → just Tab once to commit credit, then stop.
+    #      The form will be ready to save; no trailing empty row is added.
     await asyncio.sleep(0.3)
-    await page.locator(".td-cmd .fa-plus").first.click()
-    await asyncio.sleep(0.4)
+    if not is_last:
+        await page.locator(".td-cmd .fa-plus").first.click()
+        await asyncio.sleep(0.4)
+    else:
+        await page.keyboard.press("Tab")  # commit the last credit value
+        await asyncio.sleep(0.3)
 
-    log(f"    Row {idx+1}: {line['account']} | {line['label']} | D:{debit_val:.3f} C:{credit_val:.3f}")
+    # 8. Debug: color the row green once done
+    await color_row(page, idx, "#D4EDDA")
+
+    log(f"    Row {idx+1}{'[LAST]' if is_last else ''}: "
+        f"{line['account']} | {line['label']} | D:{debit_val:.3f} C:{credit_val:.3f}")
 
 
 async def verify_and_save(page: Page, ref: str, callback):
@@ -204,7 +237,7 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
 
         for i, entry in enumerate(entries):
             if stop_event and stop_event.is_set(): break
-            log(f"[{i+1}/{len(entries)}] {entry['docRef']}")
+            log(f"[{i+1}/{len(entries)}] {entry['docRef']} ({len(entry['lines'])} rows)")
 
             try:
                 reset = page.locator("button[ng-click*='resetEcritures']").first
@@ -213,8 +246,11 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
             except: pass
 
             await fill_header(page, entry)
-            for j, line in enumerate(entry["lines"]):
-                await fill_line(page, j, line)
+
+            lines = entry["lines"]
+            for j, line in enumerate(lines):
+                is_last = (j == len(lines) - 1)
+                await fill_line(page, j, line, is_last=is_last)
 
             await verify_and_save(page, entry['docRef'], update_ui_callback)
             
