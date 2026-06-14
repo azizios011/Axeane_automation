@@ -139,9 +139,10 @@ async def fill_line(page: Page, idx: int, line: dict):
     await page.keyboard.press("Enter")
     await asyncio.sleep(0.5)
 
-    # 3. After account selection, the cursor naturally lands on the Libelle field.
-    #    Just type the label and Tab through to Debit then Credit.
-    #    This mirrors exact human input — no selector guessing needed.
+    # 3. After account selection, the cursor lands on the Libelle field.
+    #    It is pre-filled with the header libelle — clear it before typing.
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Backspace")
     await page.keyboard.type(line["label"], delay=40)
     await page.keyboard.press("Tab")   # Libelle → Debit
     await asyncio.sleep(0.2)
