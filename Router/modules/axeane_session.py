@@ -168,7 +168,7 @@ async def fill_line(page: Page, idx: int, line: dict):
         if(scope.calculateTotalCredit) scope.calculateTotalCredit(true, row, false);
         scope.$apply();
     }}""", [idx, line["label"], str(line["debit"]), str(line["credit"])])
-    
+
 async def verify_and_save(page: Page, ref: str, callback):
     await wait(page, 1500)
     kpis = await page.evaluate("""() => {
