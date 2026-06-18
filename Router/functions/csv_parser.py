@@ -27,28 +27,18 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
         journal_to_use = "CA" if formula.get("use_cash") else "VT"
         
         lines = []
-        # 1. Main Client/Caisse Line
-        # 🛠️ Fix: previously this always wrote a CLIENTS line, then the Cash Rule
-        # (old step 4 below) added a second CLIENTS line + a CAISSE line, where
-        # the two CLIENTS lines netted to zero. Writing the same account code
-        # twice in one entry triggers a duplicate-account behavior in Axeane's
-        # form that silently breaks row state (empty trailing row, save blocked).
-        # Booking straight to CAISSE for cash entries gives the identical
-        # accounting result with one fewer row and no repeated account code.
-        if formula.get("use_cash"):
-            lines.append({
-                "account": formula.get("compte_caisse", "541100"),
-                "label": LBL_CAISSE,
-                "debit": ZERO if is_av else ttc,
-                "credit": ttc if is_av else ZERO
-            })
-        else:
-            lines.append({
-                "account": formula.get("compte_client", "411000"),
-                "label": LBL_CLIENT,
-                "debit": ZERO if is_av else ttc,
-                "credit": ttc if is_av else ZERO
-            })
+        # 1. Main Client Line — the sale is recognized against the
+        # receivable account first (paired with the TVA/HT/Timbre splits
+        # below). For cash clients, a second movement (step 4) then clears
+        # this receivable against CAISSE — that's two distinct real
+        # movements that legitimately land on 411 in opposite directions,
+        # not a redundant pair to be collapsed.
+        lines.append({
+            "account": formula.get("compte_client", "411000"),
+            "label": LBL_CLIENT,
+            "debit": ZERO if is_av else ttc,
+            "credit": ttc if is_av else ZERO
+        })
 
         # 2. Timbre
         if formula.get("use_timbre") and ttc > ZERO:
@@ -72,10 +62,23 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
                 acc = formula.get("compte_ht_7") if rate < 10 else formula.get("compte_ht_19")
                 lines.append({"account": acc, "label": LBL_HT_19 if rate >= 10 else LBL_HT_7, "debit": ht if is_av else ZERO, "credit": ZERO if is_av else ht})
 
-        # 4. (Cash Rule removed — CAISSE is now booked directly in step 1 above
-        #    for cash entries, instead of CLIENTS-then-CAISSE-with-a-zeroing-
-        #    CLIENTS-reversal. See comment in step 1.)
-
+        # 4. Cash Rule — clears the receivable created in step 1 by moving
+        # it to CAISSE: credit 411 (closing the receivable), debit CAISSE
+        # (cash actually received). This intentionally posts to 411 a
+        # second time in this entry, in the opposite direction from step 1.
+        if formula.get("use_cash"):
+            lines.append({
+                "account": formula.get("compte_client", "411000"),
+                "label": LBL_CLIENT,
+                "debit": ttc if is_av else ZERO,
+                "credit": ZERO if is_av else ttc
+            })
+            lines.append({
+                "account": formula.get("compte_caisse", "541100"),
+                "label": LBL_CAISSE,
+                "debit": ZERO if is_av else ttc,
+                "credit": ttc if is_av else ZERO
+            })
 
         # 5. Balance Check
         total_debit = sum(l["debit"] for l in lines)
