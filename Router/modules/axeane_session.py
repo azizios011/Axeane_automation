@@ -71,6 +71,54 @@ async def color_row(page: Page, idx: int, color: str):
         if (rows[i]) rows[i].style.backgroundColor = c;
     }""", [idx, color])
 
+async def cleanup_trailing_rows(page: Page, expected_count: int):
+    """
+    Detect and remove any trailing rows beyond `expected_count` that Axeane
+    may have auto-inserted — e.g. an empty row that appears after a row
+    whose account code duplicates an earlier row's account in the same
+    entry. Left alone, that dangling empty row blocks saving with
+    "doit avoir un crédit ou un débit" even though every row we actually
+    intended to fill already has correct values.
+
+    NOTE: the checkbox/trash selectors below are a best guess based on the
+    visible UI (per-row checkbox + a trash icon in the side toolbar). Inspect
+    the live DOM (right-click → Inspect on the row checkbox and on the trash
+    icon) and adjust the selectors if they don't match your Axeane version.
+    """
+    try:
+        rows = page.locator("tr.td-row")
+        total = await rows.count()
+        for idx in range(total - 1, expected_count - 1, -1):
+            row = rows.nth(idx)
+            acc_input = row.locator(f"input#cc_{idx}_3")
+            acc_val = ""
+            if await acc_input.count() > 0:
+                acc_val = (await acc_input.input_value()).strip()
+
+            if acc_val:
+                # This "extra" row actually has data in it — don't delete it
+                # blindly, something else is going on. Flag it and stop.
+                log(f"    ⚠️ Unexpected non-empty trailing row {idx} "
+                    f"(account='{acc_val}') — leaving for manual review")
+                continue
+
+            log(f"    🧹 Removing empty trailing row {idx}")
+            checkbox = row.locator("input[type='checkbox']").first
+            if await checkbox.count() > 0:
+                await checkbox.check()
+                await asyncio.sleep(0.2)
+                trash_btn = page.locator(
+                    ".fa-trash, .axe-sidebar-trash, button[title*='Suppr']"
+                ).first
+                if await trash_btn.count() > 0:
+                    await trash_btn.click()
+                    await asyncio.sleep(0.4)
+                else:
+                    log("    ⚠️ No delete control found — verify the "
+                        "row-delete selector for cleanup_trailing_rows()")
+    except Exception as e:
+        log(f"    ⚠️ cleanup_trailing_rows error: {e}")
+
 # ─────────────────────────────────────────────────────────────────────────
 # Navigation & Login
 # ─────────────────────────────────────────────────────────────────────────
@@ -183,17 +231,30 @@ async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
         await page.keyboard.type(f"{credit_val:.3f}", delay=50)
 
     # 7. Commit strategy:
-    #    - NOT last row → click add-button (commits credit, opens next blank row
-    #      without triggering Axeane's balanced-form auto-submit via Tab).
-    #    - Last row     → just Tab once to commit credit, then stop.
-    #      The form will be ready to save; no trailing empty row is added.
+    #    - NOT last row → Tab to commit credit, then click add-button to open
+    #      next row. We Tab first so the value is registered before the click,
+    #      then wait for the new row's account input to appear in the DOM.
+    #    - Last row → Tab once to commit, stop. No trailing empty row added.
     await asyncio.sleep(0.3)
     if not is_last:
+        await page.keyboard.press("Tab")   # commit credit value first
+        await asyncio.sleep(0.2)
         await page.locator(".td-cmd .fa-plus").first.click()
-        await asyncio.sleep(0.4)
+        # Wait until the next row's account input is present before returning
+        next_acc = f"input#cc_{idx + 1}_3"
+        try:
+            await page.wait_for_selector(next_acc, timeout=5000)
+        except:
+            await asyncio.sleep(0.6)   # fallback if selector naming differs
     else:
-        await page.keyboard.press("Tab")  # commit the last credit value
-        await asyncio.sleep(0.3)
+        # Last row: click save directly instead of Tab.
+        # Tab on a credit field can trigger Axeane to create a new empty row,
+        # which then blocks saving with "doit avoir un crédit ou un débit".
+        # Clicking #ec-save commits the credit value and saves in one action.
+        await asyncio.sleep(0.2)
+        await cleanup_trailing_rows(page, expected_count=idx + 1)
+        await page.click("#ec-save")
+        await wait_for_spinner(page)
 
     # 8. Debug: color the row green once done
     await color_row(page, idx, "#D4EDDA")
@@ -203,13 +264,46 @@ async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
 
 
 async def verify_and_save(page: Page, ref: str, callback):
-    # No solde check — Axeane backend validates balance. Just save.
-    await wait(page, 800)
-    log(f"  💾 Saving: {ref}")
+    """
+    Actively verify the save succeeded instead of assuming success just
+    because #ec-save was clicked and the spinner cleared. This is what was
+    missing before: a blocked save (e.g. from a dangling empty row) was
+    silently reported as 'success' in the UI, which is why the stuck form
+    in the screenshot wasn't caught automatically.
+
+    Checks, in order:
+      1. An error toast/alert from Axeane (validation/balance errors)
+      2. The Réf/N°doc field having cleared/changed — Axeane resets this
+         when starting a fresh entry after a real save
+
+    NOTE: the error-toast selector is a best guess (common Angular toast
+    classes). Trigger a deliberate validation error once in the browser,
+    inspect the DOM for the actual error element, and adjust the selector
+    below if it doesn't match.
+    """
+    error_locator = page.locator(".toast-error, .alert-danger, .ng-toast--danger")
+    if await error_locator.count() > 0:
+        error_text = (await error_locator.first.inner_text()).strip()
+        log(f"  ❌ Save FAILED for {ref}: {error_text}")
+        if callback:
+            callback(ref, 'error')
+        return False
+
+    ref_field = page.locator("#idDocumentInputMD2")
+    if await ref_field.count() > 0:
+        current_val = (await ref_field.input_value()).strip()
+        expected_piece = ref.split("/")[0].strip()
+        if current_val == expected_piece:
+            # Field still shows our ref — the form likely never reset,
+            # meaning the save click didn't actually go through.
+            log(f"  ❌ Save UNCONFIRMED for {ref}: form did not reset after save")
+            if callback:
+                callback(ref, 'error')
+            return False
+
+    log(f"  💾 Saved: {ref}")
     if callback:
         callback(ref, 'success')
-    await page.click("#ec-save")
-    await wait_for_spinner(page)
     return True
 
 # ─────────────────────────────────────────────────────────────────────────

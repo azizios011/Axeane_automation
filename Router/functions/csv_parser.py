@@ -27,13 +27,28 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
         journal_to_use = "CA" if formula.get("use_cash") else "VT"
         
         lines = []
-        # 1. Main Client Line
-        lines.append({
-            "account": formula.get("compte_client", "411000"), 
-            "label": LBL_CLIENT, 
-            "debit": ZERO if is_av else ttc, 
-            "credit": ttc if is_av else ZERO
-        })
+        # 1. Main Client/Caisse Line
+        # 🛠️ Fix: previously this always wrote a CLIENTS line, then the Cash Rule
+        # (old step 4 below) added a second CLIENTS line + a CAISSE line, where
+        # the two CLIENTS lines netted to zero. Writing the same account code
+        # twice in one entry triggers a duplicate-account behavior in Axeane's
+        # form that silently breaks row state (empty trailing row, save blocked).
+        # Booking straight to CAISSE for cash entries gives the identical
+        # accounting result with one fewer row and no repeated account code.
+        if formula.get("use_cash"):
+            lines.append({
+                "account": formula.get("compte_caisse", "541100"),
+                "label": LBL_CAISSE,
+                "debit": ZERO if is_av else ttc,
+                "credit": ttc if is_av else ZERO
+            })
+        else:
+            lines.append({
+                "account": formula.get("compte_client", "411000"),
+                "label": LBL_CLIENT,
+                "debit": ZERO if is_av else ttc,
+                "credit": ttc if is_av else ZERO
+            })
 
         # 2. Timbre
         if formula.get("use_timbre") and ttc > ZERO:
@@ -55,23 +70,12 @@ def parse_csv_with_mapping(mapping, raw_data, doc_type):
                 lines.append({"account": acc, "label": f"{LBL_TVA} {rate}%", "debit": tva if is_av else ZERO, "credit": ZERO if is_av else tva})
             if ht > ZERO:
                 acc = formula.get("compte_ht_7") if rate < 10 else formula.get("compte_ht_19")
-                lines.append({"account": acc, "label": LBL_HT_19 if rate > 10 else LBL_HT_7, "debit": ht if is_av else ZERO, "credit": ZERO if is_av else ht})
+                lines.append({"account": acc, "label": LBL_HT_19 if rate >= 10 else LBL_HT_7, "debit": ht if is_av else ZERO, "credit": ZERO if is_av else ht})
 
-        # 4. Cash Rule (Extra 2 lines for PASSAGER)
-        if formula.get("use_cash"):
-            # Move from Client to Caisse
-            lines.append({
-                "account": formula.get("compte_client", "411000"), 
-                "label": LBL_CLIENT, 
-                "debit": ttc if is_av else ZERO, 
-                "credit": ZERO if is_av else ttc
-            })
-            lines.append({
-                "account": formula.get("compte_caisse", "541100"), 
-                "label": LBL_CAISSE, 
-                "debit": ZERO if is_av else ttc, 
-                "credit": ttc if is_av else ZERO
-            })
+        # 4. (Cash Rule removed — CAISSE is now booked directly in step 1 above
+        #    for cash entries, instead of CLIENTS-then-CAISSE-with-a-zeroing-
+        #    CLIENTS-reversal. See comment in step 1.)
+
 
         # 5. Balance Check
         total_debit = sum(l["debit"] for l in lines)
