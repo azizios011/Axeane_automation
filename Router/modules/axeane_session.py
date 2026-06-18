@@ -71,53 +71,77 @@ async def color_row(page: Page, idx: int, color: str):
         if (rows[i]) rows[i].style.backgroundColor = c;
     }""", [idx, color])
 
-async def cleanup_trailing_rows(page: Page, expected_count: int):
+async def get_axeane_row_count(page: Page) -> int:
     """
-    Detect and remove any trailing rows beyond `expected_count` that Axeane
-    may have auto-inserted — e.g. an empty row that appears after a row
-    whose account code duplicates an earlier row's account in the same
-    entry. Left alone, that dangling empty row blocks saving with
-    "doit avoir un crédit ou un débit" even though every row we actually
-    intended to fill already has correct values.
+    Read Axeane's own row counter (the N° column of the last row) rather
+    than just counting tr.td-row elements. This matters because a
+    "trailing extra row" isn't always blank — it can be a real duplicate
+    row with data misdirected into it (see delete_last_row) — so detecting
+    it by content is unreliable. Axeane's own count of its own rows is the
+    ground truth.
 
-    NOTE: the checkbox/trash selectors below are a best guess based on the
-    visible UI (per-row checkbox + a trash icon in the side toolbar). Inspect
-    the live DOM (right-click → Inspect on the row checkbox and on the trash
-    icon) and adjust the selectors if they don't match your Axeane version.
+    NOTE: assumes N° is the 2nd <td> in each tr.td-row (checkbox, then N°,
+    matching the visible column order). Verify against the real DOM if
+    this returns something unexpected.
     """
     try:
-        rows = page.locator("tr.td-row")
-        total = await rows.count()
-        for idx in range(total - 1, expected_count - 1, -1):
-            row = rows.nth(idx)
-            acc_input = row.locator(f"input#cc_{idx}_3")
-            acc_val = ""
-            if await acc_input.count() > 0:
-                acc_val = (await acc_input.input_value()).strip()
-
-            if acc_val:
-                # This "extra" row actually has data in it — don't delete it
-                # blindly, something else is going on. Flag it and stop.
-                log(f"    ⚠️ Unexpected non-empty trailing row {idx} "
-                    f"(account='{acc_val}') — leaving for manual review")
-                continue
-
-            log(f"    🧹 Removing empty trailing row {idx}")
-            checkbox = row.locator("input[type='checkbox']").first
-            if await checkbox.count() > 0:
-                await checkbox.check()
-                await asyncio.sleep(0.2)
-                trash_btn = page.locator(
-                    ".fa-trash, .axe-sidebar-trash, button[title*='Suppr']"
-                ).first
-                if await trash_btn.count() > 0:
-                    await trash_btn.click()
-                    await asyncio.sleep(0.4)
-                else:
-                    log("    ⚠️ No delete control found — verify the "
-                        "row-delete selector for cleanup_trailing_rows()")
+        last_row = page.locator("tr.td-row").last
+        n_cell = last_row.locator("td").nth(1)
+        text = (await n_cell.inner_text()).strip()
+        return int(text)
     except Exception as e:
-        log(f"    ⚠️ cleanup_trailing_rows error: {e}")
+        log(f"    ⚠️ get_axeane_row_count failed ({e}); falling back to DOM count")
+        return await page.locator("tr.td-row").count()
+
+
+async def delete_last_row(page: Page) -> bool:
+    """
+    Select the very last row by its checkbox and remove it via the trash
+    icon. Deletes strictly by position — not by checking whether the row
+    "looks empty" — because a focus-desync bug can leave the trailing row
+    partially filled or duplicated (e.g. a repeated account code with a
+    stray value typed into its libellé) rather than cleanly blank.
+
+    NOTE: checkbox/trash selectors are a best guess based on the visible
+    UI. Verify against the real DOM if deletion doesn't actually happen.
+    """
+    try:
+        last_row = page.locator("tr.td-row").last
+        checkbox = last_row.locator("input[type='checkbox']").first
+        if await checkbox.count() > 0 and not await checkbox.is_checked():
+            await checkbox.check()
+            await asyncio.sleep(0.2)
+        trash_btn = page.locator(
+            ".fa-trash, .axe-sidebar-trash, button[title*='Suppr']"
+        ).first
+        if await trash_btn.count() == 0:
+            log("    ⚠️ No delete control found for delete_last_row()")
+            return False
+        await trash_btn.click()
+        await asyncio.sleep(0.4)
+        return True
+    except Exception as e:
+        log(f"    ⚠️ delete_last_row error: {e}")
+        return False
+
+
+async def cleanup_trailing_rows(page: Page, expected_count: int, max_attempts: int = 3):
+    """
+    Compare Axeane's own row count (N° column) against how many rows we
+    actually intended to fill, and delete the last row repeatedly until
+    the counts match — or give up after max_attempts so a genuinely
+    unrelated problem doesn't loop forever.
+    """
+    for _ in range(max_attempts):
+        current = await get_axeane_row_count(page)
+        if current <= expected_count:
+            return
+        log(f"    🧹 Axeane reports {current} rows, expected {expected_count} — deleting last row")
+        if not await delete_last_row(page):
+            return
+    final = await get_axeane_row_count(page)
+    if final > expected_count:
+        log(f"    ⚠️ cleanup_trailing_rows gave up: still {final} rows after {max_attempts} attempts")
 
 # ─────────────────────────────────────────────────────────────────────────
 # Navigation & Login
@@ -209,6 +233,36 @@ async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
     await page.keyboard.press("Enter")
     await asyncio.sleep(0.5)
 
+    # 3b. Verify focus actually landed back inside THIS row before typing
+    # anything else. Selecting an account that already appears elsewhere
+    # in the entry (e.g. a repeated 411000 line) can leave the cursor
+    # somewhere unexpected — values typed afterward then land in the wrong
+    # field, or in a row Axeane spawns on the side. If focus drifted,
+    # recover by explicitly clicking into this row's Libelle field instead
+    # of continuing to type blind.
+    focus_ok = await page.evaluate("""(rowIdx) => {
+        const rows = document.querySelectorAll('tr.td-row');
+        const row = rows[rowIdx];
+        return !!(row && row.contains(document.activeElement));
+    }""", idx)
+
+    if not focus_ok:
+        log(f"    ⚠️ Focus drifted away from row {idx} after account "
+            f"selection (account '{line['account']}' may repeat earlier "
+            f"in this entry) — attempting recovery")
+        row = page.locator("tr.td-row").nth(idx)
+        # Heuristic: Libelle is the 2nd text input in the row (1st is the
+        # account field, cc_{idx}_3). VERIFY this against the real DOM —
+        # inspect the Libelle input's id/selector and tell me if this
+        # guess is wrong, since a bad guess here would make things worse.
+        libelle_input = row.locator("input").nth(1)
+        if await libelle_input.count() > 0:
+            await libelle_input.click()
+            await asyncio.sleep(0.2)
+        else:
+            log(f"    ⚠️ Could not locate a recovery field for row {idx} "
+                f"— this row's values may be unreliable, flag for review")
+
     # 4. Fill Libelle — cursor lands here after account selection.
     #    The field is pre-filled with the header libelle; clear it first.
     await page.keyboard.press("Control+A")
@@ -252,11 +306,9 @@ async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
         # which then blocks saving with "doit avoir un crédit ou un débit".
         # Clicking #ec-save commits the credit value and saves in one action.
         await asyncio.sleep(0.2)
-        # === SAVE LOGIC DISABLED FOR INSPECTION ===
-        # await cleanup_trailing_rows(page, expected_count=idx + 1)
-        # await page.click("#ec-save")
-        # await wait_for_spinner(page)
-        log(f"    ⏸️  Save disabled — inspect the form now (row {idx+1})")
+        await cleanup_trailing_rows(page, expected_count=idx + 1)
+        await page.click("#ec-save")
+        await wait_for_spinner(page)
 
     # 8. Debug: color the row green once done
     await color_row(page, idx, "#D4EDDA")
@@ -318,14 +370,6 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
         page = next(p for p in all_pages if "kompta" in p.url.lower())
         await page.bring_to_front()
-        async def log_response(resp):
-            if "mouvementCompteComptable" in resp.url or "ecriture" in resp.url.lower():
-                try:
-                    body = await resp.text()
-                    log(f"  ← {resp.url} : {body[:500]}")
-                except: pass
-
-        page.on("response", log_response)
 
         await do_login(page)
         await select_context(page)
@@ -356,8 +400,5 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
                 is_last = (j == len(lines) - 1)
                 await fill_line(page, j, line, is_last=is_last)
 
-            # === SAVE LOGIC DISABLED FOR INSPECTION ===
-            # await verify_and_save(page, entry['docRef'], update_ui_callback)
-            log(f"  ⏸️  Entry {entry['docRef']} filled — save disabled, inspect visually")
-            input("    Press Enter to continue to next entry...")
+            await verify_and_save(page, entry['docRef'], update_ui_callback)
             
