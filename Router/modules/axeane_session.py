@@ -306,9 +306,11 @@ async def fill_line(page: Page, idx: int, line: dict, is_last: bool):
         # which then blocks saving with "doit avoir un crédit ou un débit".
         # Clicking #ec-save commits the credit value and saves in one action.
         await asyncio.sleep(0.2)
-        await cleanup_trailing_rows(page, expected_count=idx + 1)
-        await page.click("#ec-save")
-        await wait_for_spinner(page)
+        # === SAVE LOGIC DISABLED FOR INSPECTION ===
+        # await cleanup_trailing_rows(page, expected_count=idx + 1)
+        # await page.click("#ec-save")
+        # await wait_for_spinner(page)
+        log(f"    ⏸️  Save disabled — inspect the form now (row {idx+1})")
 
     # 8. Debug: color the row green once done
     await color_row(page, idx, "#D4EDDA")
@@ -400,5 +402,7 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
                 is_last = (j == len(lines) - 1)
                 await fill_line(page, j, line, is_last=is_last)
 
-            await verify_and_save(page, entry['docRef'], update_ui_callback)
+            # === SAVE LOGIC DISABLED FOR INSPECTION ===
+            # await verify_and_save(page, entry['docRef'], update_ui_callback)
+            log(f"  ⏸️  Entry {entry['docRef']} filled — save disabled, inspect visually")
             
