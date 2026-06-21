@@ -372,6 +372,14 @@ async def run(entries: list[dict], update_ui_callback=None, stop_event=None, bro
         all_pages = [p for ctx in browser.contexts for p in ctx.pages]
         page = next(p for p in all_pages if "kompta" in p.url.lower())
         await page.bring_to_front()
+        async def log_response(resp):
+            if "mouvementCompteComptable" in resp.url or "ecriture" in resp.url.lower():
+                try:
+                    body = await resp.text()
+                    log(f"  ← {resp.url} : {body[:500]}")
+                except: pass
+
+        page.on("response", log_response)
 
         await do_login(page)
         await select_context(page)
